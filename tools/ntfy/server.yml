@@ -1,0 +1,3 @@
+listen-http: ":8080"
+auth-default-access: "read-write"
+cache-duration: "12h"

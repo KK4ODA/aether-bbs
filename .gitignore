@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Environment
+.env
+venv/
+.venv/
+
+# Data & logs (runtime generated)
+logs/
+messages/*.db
+messages/*.db-shm
+messages/*.db-wal
+crash.log
+*.log
+
+# Pat dedup state
+.pat_seen_ids
+
+# Backups
+backups/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude session data
+.claude/
