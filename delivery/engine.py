@@ -38,7 +38,6 @@ from delivery.backends import (
     OutboundDeliveryBackend,
     WinlinkBackend,
     SMTPBackend,
-    LocalMTABackend,
 )
 from bbs.store import MessageStore
 from core.events import EventBus, EventType
@@ -99,13 +98,11 @@ class DeliveryEngine:
         # Backends (initialised but not configured)
         self._winlink = WinlinkBackend()
         self._smtp = SMTPBackend()
-        self._local_mta = LocalMTABackend()
 
         # Backend registry — order matters for fallback
         self._backends: dict[DeliveryBackendType, OutboundDeliveryBackend] = {
             DeliveryBackendType.WINLINK:   self._winlink,
             DeliveryBackendType.SMTP:      self._smtp,
-            DeliveryBackendType.LOCAL_MTA: self._local_mta,
         }
 
         # Sysop routing overrides: {recipient_pattern: backend_type}
@@ -131,10 +128,6 @@ class DeliveryEngine:
     @property
     def smtp_backend(self) -> SMTPBackend:
         return self._smtp
-
-    @property
-    def local_mta_backend(self) -> LocalMTABackend:
-        return self._local_mta
 
     def get_backend(self, backend_type: DeliveryBackendType) -> OutboundDeliveryBackend:
         return self._backends[backend_type]
@@ -184,19 +177,6 @@ class DeliveryEngine:
                 self._smtp.update_config(
                     enabled=smtp_cfg.enabled,
                     providers=providers_list,
-                )
-
-            # Local MTA
-            mta_cfg = getattr(od, "local_mta", None)
-            if mta_cfg:
-                self._local_mta.update_config(
-                    enabled=mta_cfg.enabled,
-                    relay_host=mta_cfg.relay_host,
-                    relay_port=mta_cfg.relay_port,
-                    use_auth=mta_cfg.use_auth,
-                    username=mta_cfg.username,
-                    password=mta_cfg.password,
-                    sender_email=mta_cfg.sender_email,
                 )
 
             # Routing overrides
@@ -341,15 +321,27 @@ class DeliveryEngine:
 
     # ── Routing ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _check_internet(timeout: float = 2.0) -> bool:
+        """Quick TCP probe to check internet availability."""
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(("8.8.8.8", 53))
+            s.close()
+            return True
+        except Exception:
+            return False
+
     def _route_message(self, message: dict) -> Optional[DeliveryBackendType]:
         """
         Determine the preferred delivery backend for a message.
 
         Routing rules:
         1. Sysop override rules (highest priority)
-        2. Email address recipients (@) → SMTP
-        3. Callsign recipients → Winlink
-        4. Default → SMTP if available, else Winlink
+        2. All recipients → Winlink (primary)
+        3. Email addresses → SMTP fallback (if Winlink unavailable)
         """
         to_addr = message.get("to_call", "").upper()
 
@@ -360,15 +352,16 @@ class DeliveryEngine:
                          f"(override rule: {pattern})")
                 return backend
 
-        # Email addresses go to SMTP
-        if "@" in to_addr:
-            if self._smtp.is_enabled():
-                return DeliveryBackendType.SMTP
-            if self._local_mta.is_enabled():
-                return DeliveryBackendType.LOCAL_MTA
-            if self._winlink.is_enabled():
-                return DeliveryBackendType.WINLINK
-            return None
+        # Primary: Winlink (handles both callsigns and email addresses)
+        if self._winlink.is_enabled():
+            return DeliveryBackendType.WINLINK
+
+        # Fallback: SMTP for email addresses when Winlink is unavailable
+        if "@" in to_addr and self._smtp.is_enabled() and self._check_internet():
+            log.info(f"Winlink unavailable — routing email to SMTP fallback")
+            return DeliveryBackendType.SMTP
+
+        return None
 
         # Callsign recipients go to Winlink
         if self._winlink.is_enabled():
@@ -461,10 +454,8 @@ class DeliveryEngine:
         # Determine the appropriate failover event type
         if backend_type == DeliveryBackendType.SMTP:
             event_type = FailoverEventType.SMTP_PROVIDER_FAILURE
-        elif backend_type == DeliveryBackendType.WINLINK:
-            event_type = FailoverEventType.WINLINK_TRANSPORT_FAILURE
         else:
-            event_type = FailoverEventType.LOCAL_MTA_FAILURE
+            event_type = FailoverEventType.WINLINK_TRANSPORT_FAILURE
 
         failover_event = FailoverEvent(
             event_type=event_type,
@@ -550,18 +541,17 @@ class DeliveryEngine:
         Determine the next backend in the failover chain.
 
         For email recipients:
-          SMTP → Local MTA → Winlink → (exhausted)
+          Winlink → SMTP fallback → (exhausted)
         For callsign recipients:
-          Winlink → (exhausted, no SMTP fallback)
+          Winlink → (exhausted)
         """
         to_addr = message.get("to_call", "")
         is_email = "@" in to_addr
 
         if is_email:
             chain = [
-                DeliveryBackendType.SMTP,
-                DeliveryBackendType.LOCAL_MTA,
                 DeliveryBackendType.WINLINK,
+                DeliveryBackendType.SMTP,
             ]
         else:
             chain = [DeliveryBackendType.WINLINK]

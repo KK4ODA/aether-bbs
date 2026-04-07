@@ -43,8 +43,7 @@ INBOX_CHECK_INTERVAL = 15  # seconds between local inbox checks
 
 # Subprocess timeouts
 COMPOSE_TIMEOUT   = 15    # seconds
-TELNET_TIMEOUT    = 120   # seconds
-RF_TIMEOUT        = 300   # seconds
+DEFAULT_CMS_TIMEOUT = 120 # seconds (configurable via settings)
 API_TIMEOUT       = 10    # seconds
 
 
@@ -112,8 +111,7 @@ class PatClient:
         self._poll_interval   = 15    # minutes
         self._auto_poll       = True
         self._forward_calls: list[str] = []
-        self._rf_fallback     = False
-        self._rf_gateway      = ""
+        self._cms_timeout     = DEFAULT_CMS_TIMEOUT
 
     # ── Configuration ────────────────────────────────────────────────────
 
@@ -129,8 +127,7 @@ class PatClient:
         poll_interval:   int    = 15,
         auto_poll:       bool   = True,
         forward_calls:   Optional[list[str]] = None,
-        rf_fallback:     bool   = False,
-        rf_gateway:      str    = "",
+        cms_timeout:     int    = 120,
     ):
         """Update Pat configuration.  Can be called while running."""
         self._enabled         = enabled
@@ -143,8 +140,7 @@ class PatClient:
         self._poll_interval   = max(1, poll_interval)
         self._auto_poll       = auto_poll
         self._forward_calls   = forward_calls or []
-        self._rf_fallback     = rf_fallback
-        self._rf_gateway      = rf_gateway.upper()
+        self._cms_timeout     = max(30, min(600, cms_timeout))
 
         # Outbound queue — routing logic is transport-agnostic
         from winlink.queue import OutboundQueue
@@ -481,30 +477,34 @@ class PatClient:
 
                 to_field = msg.get("To", msg.get("to", ""))
                 if isinstance(to_field, list) and to_field:
-                    to_addr = to_field[0].get("Addr", "") if isinstance(to_field[0], dict) else str(to_field[0])
+                    raw_to = to_field[0].get("Addr", "") if isinstance(to_field[0], dict) else str(to_field[0])
                 elif isinstance(to_field, dict):
-                    to_addr = to_field.get("Addr", "") or to_field.get("addr", "")
+                    raw_to = to_field.get("Addr", "") or to_field.get("addr", "")
                 elif isinstance(to_field, str):
-                    to_addr = to_field
+                    raw_to = to_field
                 else:
-                    to_addr = self._callsign
+                    raw_to = self._callsign
+
+                # Extract base callsign from Winlink address
+                # e.g. "KK4ODA@winlink.org" → "KK4ODA", "KK4ODA" → "KK4ODA"
+                to_addr = raw_to.split("@")[0].upper().split("-")[0] if raw_to else self._callsign
 
                 log.info(
-                    "Pat inbox: MID=%s From=%s Subject=%s",
-                    mid[:20], from_addr, subject[:40],
+                    "Pat inbox: MID=%s From=%s To=%s Subject=%s",
+                    mid[:20], from_addr, to_addr, subject[:40],
                 )
 
-                # Store in BBS message store as an inbound message
+                # Store in BBS message store as an inbound Winlink message
                 try:
-                    self._store.save_message(
-                        msg_id=mid,
+                    stored_mid = self._store.save_message(
+                        mid=mid,
                         from_call=from_addr,
                         to_call=to_addr,
                         subject=subject,
-                        body=body_text,
-                        msg_type="P",  # Private
-                        is_sent=False,
+                        body=body_text.encode("utf-8") if isinstance(body_text, str) else body_text,
                     )
+                    # Tag as received from Winlink
+                    self._store.set_cms_status(stored_mid, MessageStatus.RECEIVED)
                 except Exception as e:
                     log.warning("Failed to store inbound Winlink message %s: %s", mid, e)
                     continue
@@ -588,25 +588,20 @@ class PatClient:
 
     def _sync_cms(self) -> bool:
         """
-        Trigger Pat to connect to Winlink CMS.
-        Uses telnet by default; falls back to VARA FM RF gateway if
-        no internet and rf_fallback is configured.
+        Trigger Pat to connect to Winlink CMS via telnet (internet).
+
+        RF fallback is disabled — the VARA FM modem is reserved for
+        BBS sessions and cannot be shared with Pat simultaneously.
+        Messages queue in Pat until internet is available.
         """
         if not self._pat_exe_path or not os.path.isfile(self._pat_exe_path):
             return False
 
-        use_rf = False
-        if self._rf_fallback and self._rf_gateway and not self._check_internet():
-            use_rf = True
-            log.info("No internet — Pat connecting via VARA FM to %s", self._rf_gateway)
+        if not self._check_internet():
+            log.info("No internet — Pat sync skipped, messages queued for later")
+            return False
 
-        if use_rf:
-            connect_url = f"varafm:///{self._rf_gateway}"
-            cmd = [self._pat_exe_path, "connect", connect_url]
-            timeout = RF_TIMEOUT
-        else:
-            cmd = [self._pat_exe_path, "connect", "telnet"]
-            timeout = TELNET_TIMEOUT
+        cmd = [self._pat_exe_path, "connect", "telnet"]
 
         try:
             log.info("Pat sync: %s", " ".join(cmd))
@@ -614,10 +609,10 @@ class PatClient:
                 cmd,
                 cwd=os.path.dirname(self._pat_exe_path),
                 capture_output=True,
-                timeout=timeout,
+                timeout=self._cms_timeout,
             )
             if proc.returncode == 0:
-                log.info("Pat session completed (%s)", "RF" if use_rf else "telnet")
+                log.info("Pat CMS sync completed (telnet)")
                 return True
             log.warning("Pat connect failed: %s", proc.stderr.decode()[:200])
             return False

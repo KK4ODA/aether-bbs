@@ -168,6 +168,9 @@ class MessageStore:
             ("messages", "delivery_status",           "TEXT NOT NULL DEFAULT ''"),
             ("messages", "delivery_backend_selected", "TEXT NOT NULL DEFAULT ''"),
             ("messages", "delivery_state",            "TEXT NOT NULL DEFAULT ''"),
+            # ── User prefs: Winlink opt-in ───────────────────────────────
+            ("user_prefs", "winlink_registered", "INTEGER NOT NULL DEFAULT 0"),
+            ("user_prefs", "winlink_password", "TEXT NOT NULL DEFAULT ''"),
         ]
         for table, col, definition in new_cols:
             try:
@@ -573,6 +576,38 @@ class MessageStore:
                 (callsign.upper(), pager_lines, last_read, now),
             )
             self._conn.commit()
+
+    def set_winlink_registered(self, callsign: str, registered: bool,
+                               winlink_password: str = ""):
+        """Set Winlink forwarding opt-in for a callsign with their CMS password."""
+        call = callsign.upper()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO user_prefs (callsign, winlink_registered, winlink_password)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(callsign) DO UPDATE SET
+                       winlink_registered=excluded.winlink_registered,
+                       winlink_password=CASE WHEN excluded.winlink_registered=1
+                           THEN excluded.winlink_password
+                           ELSE '' END""",
+                (call, 1 if registered else 0, winlink_password),
+            )
+            self._conn.commit()
+        log.info(f"Winlink registration for {call}: {'ON' if registered else 'OFF'}")
+
+    def get_winlink_registered_calls(self) -> list[dict]:
+        """Return all callsigns opted in to Winlink forwarding with passwords.
+
+        Returns list of {"callsign": str, "password": str}.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT callsign, winlink_password FROM user_prefs "
+                "WHERE winlink_registered=1"
+            )
+            return [{"callsign": row["callsign"],
+                     "password": row["winlink_password"]}
+                    for row in cur.fetchall()]
 
     def message_count(self) -> int:
         with self._lock:

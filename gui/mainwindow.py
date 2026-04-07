@@ -28,8 +28,6 @@ from gui.settings import SettingsTab
 from gui.log_viewer import LogViewerTab
 from gui.packet_monitor import PacketMonitorTab
 from gui.messages_tab import MessagesTab
-from gui.simulator_tab import SimulatorTab
-from gui.test_runner_tab import TestRunnerTab
 from gui.bulletins_tab import BulletinsTab
 from gui.files_tab import FilesTab
 from gui.chat_window import ChatWindow
@@ -120,6 +118,13 @@ class MainWindow(QMainWindow):
         self._timer.timeout.connect(self._refresh_status)
         self._timer.start(1000)
 
+        # Internet connectivity check (every 30s)
+        self._inet_online = True
+        self._inet_timer = QTimer(self)
+        self._inet_timer.timeout.connect(self._check_internet)
+        self._inet_timer.start(30_000)
+        QTimer.singleShot(2000, self._check_internet)  # first check after 2s
+
         log.info("Main window created")
 
     # ── UI construction ───────────────────────────────────────────────────
@@ -199,14 +204,9 @@ class MainWindow(QMainWindow):
             "Settings"
         )
 
-        # ── Tab 4: Diagnostics (compound — Simulator, Tests, etc.) ────
+        # ── Tab 4: Diagnostics ────────────────────────────────────────
         self._diag_group = QTabWidget()
 
-        self._simulator_tab = SimulatorTab(
-            self._config, self._im, parent=self
-        )
-        self._diag_group.addTab(self._simulator_tab, "Simulator")
-        self._diag_group.addTab(TestRunnerTab(parent=self), "Tests")
         self._diag_group.addTab(
             PacketMonitorTab(
                 self._im, self._store, self._bus, parent=self
@@ -240,6 +240,12 @@ class MainWindow(QMainWindow):
             self._inst_indicators[name] = ind
 
         self._status_bar.addPermanentWidget(inst_container)
+
+        # Internet status indicator
+        self._inet_label = QLabel("NET: ?")
+        self._inet_label.setStyleSheet(f"color:{TEXT_MUTED}; font-size:9pt;")
+        self._inet_label.setToolTip("Internet connectivity status")
+        self._status_bar.addPermanentWidget(self._inet_label)
 
         # Scan status indicator — permanent widget on the far right.
         self._scan_label = QLabel("")
@@ -568,6 +574,35 @@ class MainWindow(QMainWindow):
 
         self._update_title()
 
+    def _check_internet(self):
+        """Periodic internet connectivity check — updates status bar indicator."""
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect(("8.8.8.8", 53))
+            s.close()
+            online = True
+        except Exception:
+            online = False
+
+        if online != self._inet_online:
+            self._inet_online = online
+            if online:
+                log.info("Internet connectivity restored")
+            else:
+                log.warning("Internet connectivity lost — Winlink/email messages will queue")
+
+        if online:
+            self._inet_label.setText("NET: OK")
+            self._inet_label.setStyleSheet(f"color:{GREEN}; font-size:9pt;")
+            self._inet_label.setToolTip("Internet: connected")
+        else:
+            self._inet_label.setText("NET: DOWN")
+            self._inet_label.setStyleSheet(f"color:{RED}; font-size:9pt; font-weight:bold;")
+            self._inet_label.setToolTip(
+                "Internet: offline — Winlink and email messages will queue until restored")
+
     def _update_title(self):
         """Update window title with callsign and session count."""
         cfg = self._cm.current() or self._config
@@ -610,11 +645,6 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            # Stop any running simulators cleanly
-            if hasattr(self, "_simulator_tab"):
-                for panel in self._simulator_tab._panels.values():
-                    if panel._sim:
-                        panel._stop_sim()
             self._bus.emit(EventType.SHUTDOWN)
             event.accept()
         else:

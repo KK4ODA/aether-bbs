@@ -1,20 +1,8 @@
 """
 vara/broker.py
 
-TNCBroker — owns the single VARAFMInterface for one VARA FM instance and
-arbitrates access between multiple clients:
-
-  1. The BBS dispatcher (internal, uses acquire_session / release_session
-     exactly as it did with the old VARAFMMux).
-  2. External applications (Winlink Express, packet terminal, …) that
-     connect to a local VARA-protocol proxy port pair over TCP.
-
-When broker.enabled is False the proxy server is never started and this
-class is functionally identical to the old VARAFMMux — zero behaviour
-change for existing code.
-
-Public API is a strict superset of VARAFMMux so it can be used as a
-drop-in replacement.
+TNCBroker — owns the single VARAFMInterface for one VARA FM instance
+and arbitrates session access for the BBS dispatcher.
 """
 
 import time
@@ -45,15 +33,8 @@ class SessionHandler(Protocol):
 
 class TNCBroker:
     """
-    Owns the VARAFMInterface for one VARA FM instance.
-
-    Drop-in replacement for the old VARAFMMux.  Adds an optional TCP proxy
-    server so external apps can share access when broker.enabled = True.
-
-    Internal BBS sessions use acquire_session / release_session as before.
-    External sessions connect to localhost:broker_cmd_port and talk the
-    native VARA FM protocol; the broker proxies their traffic and enforces
-    the same single-session lock.
+    Owns the VARAFMInterface for one VARA FM instance and
+    arbitrates session access via acquire_session / release_session.
     """
 
     def __init__(
@@ -83,25 +64,6 @@ class TNCBroker:
         self._bus.subscribe(EventType.VARA_DISCONNECTED,    self._on_vara_disconnected)
 
         self._data_relay_thread: Optional[threading.Thread] = None
-
-        # Optional proxy server for external apps
-        self._proxy: Optional[_ProxyServer] = None
-        if app_cfg.broker.enabled:
-            try:
-                self._proxy = _ProxyServer(
-                    broker   = self,
-                    cmd_port = app_cfg.broker.cmd_port,
-                    data_port= app_cfg.broker.data_port,
-                    name     = inst_cfg.name,
-                )
-                self._proxy.start()
-                log.info(
-                    f"[{inst_cfg.name}] TNC proxy listening on "
-                    f"cmd:{app_cfg.broker.cmd_port} "
-                    f"data:{app_cfg.broker.data_port}"
-                )
-            except OSError as e:
-                log.error(f"[{inst_cfg.name}] Could not start TNC proxy: {e}")
 
         # ── Shared OmniRig client (single COM thread) ─────────────
         # If both PTT and rig control use OmniRig, they MUST share a
@@ -151,6 +113,8 @@ class TNCBroker:
                     cm108_device=ptt_cfg.cm108_device,
                     omnirig_rig=ptt_cfg.omnirig_rig,
                     omnirig_client=self._omnirig_client,
+                    flrig_host=getattr(ptt_cfg, 'flrig_host', '127.0.0.1'),
+                    flrig_port=getattr(ptt_cfg, 'flrig_port', 12345),
                 )
                 self._ptt = PTTController(
                     instance_name=inst_cfg.name,
@@ -218,9 +182,6 @@ class TNCBroker:
         self._bus.unsubscribe(EventType.SESSION_DISCONNECTED, self._on_session_disconnected)
         self._bus.unsubscribe(EventType.VARA_CONNECTED,       self._on_vara_connected)
         self._bus.unsubscribe(EventType.VARA_DISCONNECTED,    self._on_vara_disconnected)
-        if self._proxy:
-            self._proxy.stop()
-            self._proxy = None
         if self._ptt:
             self._ptt.stop()
             self._ptt = None
@@ -458,305 +419,3 @@ class TNCBroker:
         if not self._retired and self._interface.state != VARAFMState.DISCONNECTED:
             self._start_data_relay()
 
-
-# ── Proxy server — exposes VARA FM protocol to external apps ──────────────────
-
-class _ClientSession(SessionHandler):
-    """
-    Represents one external app connected to the proxy.
-
-    Implements SessionHandler so it can call acquire_session / release_session
-    on the broker just like the BBS dispatcher does.
-
-    The client sees a standard VARA FM command/data interface:
-      - cmd socket  → send VARA commands, receive VARA events
-      - data socket → send/receive RF payload bytes
-
-    Session lifecycle:
-      1. Client connects cmd socket (data socket optional until needed).
-      2. Client sends LISTEN ON → broker acquires session lock (queued if busy).
-      3. VARA FM events forwarded to client cmd socket.
-      4. Client RF payload forwarded through broker → VARA FM data socket.
-      5. On DISCONNECTED event or client disconnect → broker releases lock.
-    """
-
-    def __init__(
-        self,
-        broker:   "TNCBroker",
-        cmd_conn: socket.socket,
-        name:     str,
-    ):
-        self._broker    = broker
-        self._cmd_conn  = cmd_conn
-        self._data_conn: Optional[socket.socket] = None
-        self._name      = name
-        self._has_lock  = False
-        self._stop      = threading.Event()
-        self._cmd_buf   = ""
-
-    # ── SessionHandler implementation ─────────────────────────────────────
-
-    def on_cmd_event(self, event: str) -> None:
-        """Forward VARA FM events back to the external client."""
-        try:
-            self._cmd_conn.sendall((event + "\r\n").encode("ascii", errors="replace"))
-        except OSError:
-            self._stop.set()
-
-        # Auto-release on disconnect
-        if event.upper().startswith("DISCONNECTED"):
-            self._release()
-
-    def on_data(self, data: bytes) -> None:
-        """Forward RF data bytes to the external client's data socket."""
-        if self._data_conn:
-            try:
-                self._data_conn.sendall(data)
-            except OSError:
-                self._stop.set()
-
-    # ── Main loops ────────────────────────────────────────────────────────
-
-    def run_cmd(self):
-        """Read commands from the external client cmd socket."""
-        try:
-            while not self._stop.is_set():
-                try:
-                    chunk = self._cmd_conn.recv(1024)
-                    if not chunk:
-                        break
-                    self._cmd_buf += chunk.decode("ascii", errors="replace")
-                    self._cmd_buf = self._cmd_buf.replace("\r\n", "\n").replace("\r", "\n")
-                    while "\n" in self._cmd_buf:
-                        line, self._cmd_buf = self._cmd_buf.split("\n", 1)
-                        line = line.strip()
-                        if line:
-                            self._handle_client_cmd(line)
-                except OSError:
-                    break
-        finally:
-            self._release()
-            self._cleanup()
-
-    def attach_data(self, data_conn: socket.socket):
-        """Attach a data socket to this session after cmd is already running."""
-        self._data_conn = data_conn
-        threading.Thread(
-            target=self.run_data,
-            args=(data_conn,),
-            name=f"ProxyDataSession-{self._name}-late",
-            daemon=True,
-        ).start()
-
-    def run_data(self, data_conn: socket.socket):
-        """Read data bytes from the external client data socket and forward to VARA FM."""
-        self._data_conn = data_conn
-        try:
-            while not self._stop.is_set():
-                try:
-                    data = data_conn.recv(4096)
-                    if not data:
-                        break
-                    if self._has_lock:
-                        self._broker.send_data(data)
-                except OSError:
-                    break
-        finally:
-            self._stop.set()
-
-    # ── Internal ──────────────────────────────────────────────────────────
-
-    def _handle_client_cmd(self, cmd: str):
-        upper = cmd.upper()
-        log.debug(f"[{self._name}] proxy CMD from client: {cmd}")
-
-        if upper.startswith("LISTEN"):
-            # Client wants to become the active listener — acquire the lock
-            if not self._has_lock:
-                log.info(f"[{self._name}] External client requesting session lock")
-                threading.Thread(
-                    target=self._acquire_then_forward,
-                    args=(cmd,),
-                    daemon=True,
-                ).start()
-            else:
-                self._broker.send_cmd(cmd)
-
-        elif upper.startswith("CONNECT "):
-            # Outbound connect — acquire lock first if we don't have it
-            if not self._has_lock:
-                threading.Thread(
-                    target=self._acquire_then_forward,
-                    args=(cmd,),
-                    daemon=True,
-                ).start()
-            else:
-                self._broker.send_cmd(cmd)
-
-        elif upper.startswith("DISCONNECT"):
-            self._broker.send_cmd(cmd)
-            # Don't release yet — wait for DISCONNECTED event
-
-        elif upper.startswith("MYCALL"):
-            # Pass through but don't override the BBS callsign permanently
-            if self._has_lock:
-                self._broker.send_cmd(cmd)
-
-        else:
-            # All other commands (ABORT, etc.) pass through if we hold the lock
-            if self._has_lock:
-                self._broker.send_cmd(cmd)
-            else:
-                log.debug(f"[{self._name}] Proxy dropping command (no lock): {cmd}")
-
-    def _acquire_then_forward(self, cmd_after: str):
-        """Acquire the session lock (blocking, up to 60s), then send cmd_after."""
-        acquired = self._broker.acquire_session(self, timeout=60.0)
-        if acquired:
-            self._has_lock = True
-            log.info(f"[{self._name}] External client acquired session lock")
-            # Send a synthetic IDLE/LISTENING acknowledgement so the client
-            # knows VARA FM is ready (mirrors what VARA FM sends after init)
-            try:
-                self._cmd_conn.sendall(b"IAMALIVE\r\n")
-            except OSError:
-                pass
-            self._broker.send_cmd(cmd_after)
-        else:
-            log.warning(f"[{self._name}] External client session lock timeout")
-            try:
-                self._cmd_conn.sendall(b"BUSY\r\n")
-            except OSError:
-                pass
-
-    def _release(self):
-        if self._has_lock:
-            self._has_lock = False
-            self._broker.release_session(self)
-            log.info(f"[{self._name}] External client released session lock")
-
-    def _cleanup(self):
-        self._stop.set()
-        for conn in (self._cmd_conn, self._data_conn):
-            if conn:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-
-
-class _ProxyServer:
-    """
-    Listens on two loopback ports (cmd + data) and manages external client
-    sessions.  Each connected cmd client gets a _ClientSession; the matching
-    data connection is paired by arrival order.
-    """
-
-    def __init__(
-        self,
-        broker:    TNCBroker,
-        cmd_port:  int,
-        data_port: int,
-        name:      str,
-    ):
-        self._broker    = broker
-        self._cmd_port  = cmd_port
-        self._data_port = data_port
-        self._name      = name
-        self._stop      = threading.Event()
-
-        # Pairing state — both lists protected by _pair_lock.
-        # A cmd session and data socket are matched by whichever arrives second.
-        self._unpaired_sessions: list[_ClientSession] = []  # cmd arrived first
-        self._unpaired_data:     list[socket.socket]  = []  # data arrived first
-        self._pair_lock = threading.Lock()
-
-        self._cmd_server:  Optional[socket.socket] = None
-        self._data_server: Optional[socket.socket] = None
-
-    def start(self):
-        # Create listening sockets
-        self._cmd_server  = self._make_server(self._cmd_port)
-        self._data_server = self._make_server(self._data_port)
-
-        threading.Thread(target=self._accept_cmd,  name=f"ProxyCmd-{self._name}",  daemon=True).start()
-        threading.Thread(target=self._accept_data, name=f"ProxyData-{self._name}", daemon=True).start()
-
-    def stop(self):
-        self._stop.set()
-        for s in (self._cmd_server, self._data_server):
-            if s:
-                try:
-                    s.close()
-                except OSError:
-                    pass
-
-    def _make_server(self, port: int) -> socket.socket:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("127.0.0.1", port))
-        s.listen(5)
-        s.settimeout(1.0)
-        return s
-
-    def _accept_cmd(self):
-        while not self._stop.is_set():
-            try:
-                conn, addr = self._cmd_server.accept()
-                log.info(f"[{self._name}] External app connected (cmd) from {addr}")
-                session = _ClientSession(self._broker, conn, self._name)
-
-                with self._pair_lock:
-                    if self._unpaired_data:
-                        # Data socket already waiting — pair immediately
-                        data_conn = self._unpaired_data.pop(0)
-                        log.debug(f"[{self._name}] Paired cmd+data (data arrived first)")
-                    else:
-                        # Data socket not here yet — queue session and wait
-                        data_conn = None
-                        self._unpaired_sessions.append(session)
-                        log.debug(f"[{self._name}] Cmd connected first; waiting for data socket")
-
-                threading.Thread(
-                    target=session.run_cmd,
-                    name=f"ProxyCmdSession-{self._name}",
-                    daemon=True,
-                ).start()
-
-                if data_conn:
-                    threading.Thread(
-                        target=session.run_data,
-                        args=(data_conn,),
-                        name=f"ProxyDataSession-{self._name}",
-                        daemon=True,
-                    ).start()
-
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-
-    def _accept_data(self):
-        while not self._stop.is_set():
-            try:
-                conn, addr = self._data_server.accept()
-                log.info(f"[{self._name}] External app connected (data) from {addr}")
-
-                with self._pair_lock:
-                    if self._unpaired_sessions:
-                        # Cmd session already running — attach data socket now
-                        session = self._unpaired_sessions.pop(0)
-                        log.debug(f"[{self._name}] Paired data+cmd (cmd arrived first)")
-                    else:
-                        # Cmd socket not here yet — queue data and wait
-                        session = None
-                        self._unpaired_data.append(conn)
-                        log.debug(f"[{self._name}] Data connected first; waiting for cmd socket")
-
-                if session:
-                    session.attach_data(conn)
-
-            except socket.timeout:
-                continue
-            except OSError:
-                break

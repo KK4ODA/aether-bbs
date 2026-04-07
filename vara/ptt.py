@@ -373,7 +373,7 @@ class OmniRigDriver(PTTDriver):
 
     def open(self) -> None:
         if self._client is not None:
-            # Shared client — already started by broker
+            # Shared client — already started
             if not self._client.is_started:
                 self._client.start()
             self._owns_client = False
@@ -438,6 +438,62 @@ class OmniRigDriver(PTTDriver):
         return self._client
 
 
+# ── FLrig PTT ──────────────────────────────────────────────────────────────
+
+class FLrigDriver(PTTDriver):
+    """
+    PTT via FLrig XML-RPC server.
+
+    FLrig supports hundreds of radios and runs as a standalone app.
+    The client may be injected (shared mode) or created internally.
+    """
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 12345, client=None):
+        self._host = host
+        self._port = port
+        self._client = client
+        self._owns_client = False
+
+    def open(self) -> None:
+        if self._client is not None:
+            if not self._client.is_started:
+                self._client.start()
+            self._owns_client = False
+        else:
+            from vara.flrig import FLrigClient
+            self._client = FLrigClient(host=self._host, port=self._port)
+            self._client.start()
+            self._owns_client = True
+        log.info(f"FLrig PTT connected to {self._host}:{self._port}")
+
+    def close(self) -> None:
+        if self._client:
+            try:
+                self._client.set_ptt(False)
+            except Exception as e:
+                log.warning(f"FLrig PTT release failed: {e}")
+            if self._owns_client:
+                self._client.stop()
+                self._client = None
+        log.info("FLrig PTT disconnected")
+
+    def set_ptt(self, on: bool) -> None:
+        if not self._client or not self._client.is_started:
+            log.warning("FLrig PTT: not connected")
+            return
+        ok = self._client.set_ptt(on)
+        if not ok:
+            log.error("FLrig PTT command failed")
+
+    def description(self) -> str:
+        return f"FLrig XML-RPC at {self._host}:{self._port}"
+
+    @property
+    def client(self):
+        """Return the FLrigClient for sharing with rig control."""
+        return self._client
+
+
 # ── Driver Factory ────────────────────────────────────────────────────────────
 
 def create_ptt_driver(
@@ -448,6 +504,9 @@ def create_ptt_driver(
     cm108_device: str = "",
     omnirig_rig: int = 1,
     omnirig_client=None,
+    flrig_host: str = "127.0.0.1",
+    flrig_port: int = 12345,
+    flrig_client=None,
 ) -> PTTDriver:
     """
     Create a PTT driver from configuration parameters.
@@ -485,10 +544,13 @@ def create_ptt_driver(
     elif method == "OMNIRIG":
         return OmniRigDriver(rig_number=omnirig_rig, client=omnirig_client)
 
+    elif method == "FLRIG":
+        return FLrigDriver(host=flrig_host, port=flrig_port, client=flrig_client)
+
     else:
         raise ValueError(
             f"Unknown PTT method '{method}'. "
-            f"Valid options: VOX, RTS, DTR, DTRRTS, HAMLIB, CM108, OMNIRIG"
+            f"Valid options: VOX, RTS, DTR, DTRRTS, HAMLIB, CM108, OMNIRIG, FLRIG"
         )
 
 
@@ -586,8 +648,7 @@ class PTTController:
     def get_omnirig_client(self):
         """Return the OmniRigClient if using OmniRig, else None.
 
-        Used by the broker to share the single OmniRig COM connection
-        with the rig controller.
+        Used to share the single OmniRig COM connection with the rig controller.
         """
         if isinstance(self._driver, OmniRigDriver):
             return self._driver.client

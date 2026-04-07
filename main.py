@@ -137,6 +137,10 @@ class BBSApplication:
         )
         self._apply_winlink_config(self.config)
 
+        # Wire outbound queue into dispatcher for Winlink routing
+        if self.cms_poller and self.cms_poller.outbound_queue:
+            self.dispatcher._outbound_queue = self.cms_poller.outbound_queue
+
         # CMS notification hooks
         self.cms_notifier = CMSNotifier(self.event_bus)
 
@@ -150,6 +154,7 @@ class BBSApplication:
 
         # Winlink forward manager — dynamically builds ;FW list
         self.forward_manager = WinlinkForwardManager(event_bus=self.event_bus)
+        wl = self.config.winlink
         od = self.config.outbound_delivery
         self.forward_manager.update_config(
             gateway_callsign=wl.gateway_callsign,
@@ -158,6 +163,7 @@ class BBSApplication:
             max_calls=od.winlink_forward.max_calls,
         )
         self.forward_manager.set_access_controller(self.access_controller)
+        self.forward_manager.set_message_store(self.message_store)
         self.cms_poller.set_forward_manager(self.forward_manager)
 
         # Inbound email poller — IMAP/POP3 polling for email→RF delivery
@@ -270,8 +276,7 @@ class BBSApplication:
             poll_interval=wl.poll_interval,
             auto_poll=wl.auto_poll,
             forward_calls=wl.forward_calls,
-            rf_fallback=wl.rf_fallback,
-            rf_gateway=wl.rf_gateway,
+            cms_timeout=wl.cms_timeout,
         )
 
     def _on_config_changed_cms(self, event):

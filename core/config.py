@@ -144,7 +144,7 @@ class PTTConfig(BaseModel):
     VARA FM handles PTT internally — leave method as 'VOX' for FM.
     VARA HF requires the application to key the radio.
 
-    Methods: VOX, RTS, DTR, DTRRTS, HAMLIB, CM108, OMNIRIG
+    Methods: VOX, RTS, DTR, DTRRTS, HAMLIB, CM108, OMNIRIG, FLRIG
     """
     method:           str   = "VOX"
     port:             str   = ""           # serial port for RTS/DTR
@@ -152,6 +152,8 @@ class PTTConfig(BaseModel):
     hamlib_port:      int   = Field(default=4532, ge=1, le=65535)
     cm108_device:     str   = ""
     omnirig_rig:      int   = Field(default=1, ge=1, le=2)  # Rig1 or Rig2
+    flrig_host:       str   = "127.0.0.1"
+    flrig_port:       int   = Field(default=12345, ge=1, le=65535)
     watchdog_timeout: float = Field(default=90.0, ge=10.0, le=600.0)
 
 
@@ -295,13 +297,6 @@ class GUIConfig(BaseModel):
     confirm_restart: bool = True
 
 
-class BrokerConfig(BaseModel):
-    """TNC broker — allows external apps to share the VARA command port."""
-    enabled:   bool = False
-    cmd_port:  int  = Field(default=8400, ge=1024, le=65535)
-    data_port: int  = Field(default=8401, ge=1024, le=65535)
-
-
 class WinlinkConfig(BaseModel):
     """Winlink integration via Pat client (https://getpat.io)."""
     enabled:            bool       = False
@@ -315,8 +310,7 @@ class WinlinkConfig(BaseModel):
     pat_exe_path:       str        = ""        # path to pat.exe
     pat_http_addr:      str        = "localhost:8080"  # Pat HTTP API address
     auto_launch_pat:    bool       = True      # auto-start Pat with BBS
-    rf_fallback:        bool       = False     # use VARA FM if no internet
-    rf_gateway:         str        = ""        # RF gateway callsign e.g. "WD5EMA-10"
+    cms_timeout:        int        = Field(default=120, ge=30, le=600)  # seconds
 
 
 class SecurityConfig(BaseModel):
@@ -347,7 +341,6 @@ class AppConfig(BaseModel):
     alert:     AlertConfig     = Field(default_factory=AlertConfig)
     logging:   LoggingConfig   = Field(default_factory=LoggingConfig)
     gui:       GUIConfig       = Field(default_factory=GUIConfig)
-    broker:    BrokerConfig       = Field(default_factory=BrokerConfig)
     winlink:   WinlinkConfig      = Field(default_factory=WinlinkConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     file_upload: FileUploadConfig = Field(default_factory=FileUploadConfig)

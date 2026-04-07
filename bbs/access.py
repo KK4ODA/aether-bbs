@@ -560,6 +560,32 @@ class AccessController:
         self.record_auth_failure(callsign)
         return False
 
+    def get_decrypted_password(self, callsign: str) -> Optional[str]:
+        """Return the decrypted BBS password for a callsign, or None."""
+        base = _base_call(callsign)
+        cfg = self._cfg()
+        machine = cfg.security.machine_secret or "default"
+
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT password_hash FROM access_control WHERE callsign=?",
+                (base,),
+            )
+            row = cur.fetchone()
+
+        if not row or not row[0]:
+            return None
+
+        parts = row[0].split(":", 2)
+        if len(parts) < 3:
+            return None  # no encrypted form available
+
+        salt, _, encrypted_b64 = parts
+        try:
+            return _decrypt_password(encrypted_b64, machine, salt)
+        except Exception:
+            return None
+
     # ── Failure tracking ─────────────────────────────────────────────
 
     def check_lockout(self, callsign: str) -> tuple[bool, str]:

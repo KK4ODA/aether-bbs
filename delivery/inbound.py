@@ -760,6 +760,7 @@ class WinlinkForwardManager:
         self._manual_calls: list[str] = []
         self._mode = ForwardListMode.MANUAL
         self._access_controller = None
+        self._store = None   # MessageStore for WL-registered user queries
         self._max_calls = self.MAX_FORWARD_CALLS
         self._lock = threading.Lock()
 
@@ -782,6 +783,10 @@ class WinlinkForwardManager:
         """Inject the access controller for user enumeration."""
         self._access_controller = ac
 
+    def set_message_store(self, store) -> None:
+        """Inject the message store for WL-registered user queries."""
+        self._store = store
+
     def build_forward_list(self) -> list[str]:
         """
         Build the complete ;FW callsign list.
@@ -800,6 +805,20 @@ class WinlinkForwardManager:
             if c:
                 calls.add(c)
 
+        # Include users who opted in via WLREG command
+        # Pat requires CALLSIGN:password format for auxiliary addresses
+        wl_users_with_pw: dict[str, str] = {}  # callsign → "CALL:pw" for Pat
+        if self._store:
+            try:
+                for entry in self._store.get_winlink_registered_calls():
+                    base = entry["callsign"].upper().split("-")[0]
+                    pw = entry.get("password", "")
+                    calls.add(base)
+                    if pw:
+                        wl_users_with_pw[base] = f"{base}:{pw}"
+            except Exception as e:
+                log.error(f"Failed to query WL-registered users: {e}")
+
         # Auto-populate from access controller
         if self._mode != ForwardListMode.MANUAL and self._access_controller:
             try:
@@ -812,12 +831,14 @@ class WinlinkForwardManager:
                 log.error(f"Failed to enumerate users for ;FW list: {e}")
 
         # Build ordered list: gateway first, then sorted
+        # Use CALL:password format for WL-registered users (Pat requirement)
         result = []
         if self._gateway_callsign:
             result.append(self._gateway_callsign)
             calls.discard(self._gateway_callsign)
 
-        result.extend(sorted(calls))
+        for c in sorted(calls):
+            result.append(wl_users_with_pw.get(c, c))
 
         # Enforce cap
         if len(result) > self._max_calls:

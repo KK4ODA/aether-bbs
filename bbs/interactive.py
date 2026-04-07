@@ -54,6 +54,9 @@ Commands:\r
   I           - BBS info\r
   P <n>       - Set pager lines (default 20)\r
   CH          - Chat with sysop (if available)\r
+  S user@addr - Send via Winlink (email addresses route automatically)\r
+  WLREG       - Register for Winlink email forwarding\r
+  WLOFF       - Unregister from Winlink forwarding\r
   SETPASS <pw>- Set or change your login password\r
   REGISTER    - Request access (if not yet registered)\r
   B / 73      - Bye\r
@@ -100,6 +103,7 @@ class InteractiveSession:
         access_controller=None,  # bbs.access.AccessController
         mode_policy=None,        # bbs.mode_policy.ModePolicy
         rate_limiter=None,       # bbs.rate_limiter.RateLimiter
+        outbound_queue=None,     # winlink.queue.OutboundQueue
     ):
         self.remote_call   = remote_call.upper()
         self.instance_name = instance_name
@@ -113,6 +117,7 @@ class InteractiveSession:
         self._access       = access_controller
         self._policy       = mode_policy
         self._rate_limiter = rate_limiter
+        self._outbound_queue = outbound_queue
 
         self._rx_queue: queue.Queue[str] = queue.Queue()
         self._running  = True
@@ -287,6 +292,15 @@ class InteractiveSession:
                         f"{', '.join(areas_hit)} !!!\r\n"
                         f"!!! Type LB <area> to read. !!!\r\n"
                     )
+            # Internet status notice
+            if not self._check_internet():
+                self._send(
+                    "\r\n"
+                    "*** NOTICE: BBS internet connection is down. ***\r\n"
+                    "*** Winlink and email messages will be queued ***\r\n"
+                    "*** and delivered when connectivity returns.  ***\r\n"
+                )
+
             self._show_prompt()
 
             # ── Main command loop ────────────────────────────────────
@@ -540,6 +554,17 @@ class InteractiveSession:
             self._show_prompt()
             return
 
+        # ── Winlink registration ─────────────────────────────────────
+        if upper == "WLREG":
+            self._cmd_wlreg()
+            return
+
+        if upper == "WLOFF":
+            self._store.set_winlink_registered(self.remote_call, False)
+            self._send("Winlink forwarding disabled for your callsign.\r\n")
+            self._show_prompt()
+            return
+
         # ── Access control permission check ──────────────────────────
         if self._access and not self._access.has_permission(self.remote_call, cmd):
             self._send("Permission denied for this command.\r\n")
@@ -650,6 +675,80 @@ class InteractiveSession:
 
     # ── BBS commands ──────────────────────────────────────────────────────
 
+    def _cmd_wlreg(self):
+        """Register for Winlink email forwarding with encrypted password exchange.
+
+        Protocol:
+          1. BBS sends  ;WLREG NONCE <32hex>
+          2. Client encrypts Winlink password:
+             key = SHA256(bbs_password + nonce), then XOR
+          3. Client sends  ;WLREG <hex_encrypted>
+          4. BBS decrypts using same key (it knows the BBS password)
+        """
+        import hashlib as _hl
+
+        if not self._access:
+            self._send("Winlink registration not available.\r\n")
+            self._show_prompt()
+            return
+
+        # Get the user's decrypted BBS password (needed as shared key)
+        bbs_password = self._access.get_decrypted_password(self.remote_call)
+        if not bbs_password:
+            self._send(
+                "You must have a BBS password set before registering for Winlink.\r\n"
+                "Use SETPASS to set one first.\r\n"
+            )
+            self._show_prompt()
+            return
+
+        # Generate nonce and send challenge
+        import secrets as _sec
+        nonce = _sec.token_hex(16)
+        self._send(f";WLREG NONCE {nonce}\r\n")
+        self._send("VARA Term will prompt for your Winlink password.\r\n")
+
+        # Wait for encrypted response
+        line = self._get_line(timeout=120)
+        if line is None or line is _RF_DISCONNECTED:
+            return
+
+        response = line.strip()
+        if response.startswith(";WLREG "):
+            encrypted_hex = response[7:].strip()
+        else:
+            # User typed something else — maybe a raw password (insecure fallback)
+            self._send("Registration cancelled.\r\n")
+            self._show_prompt()
+            return
+
+        # Decrypt: key = SHA256(bbs_password + nonce), XOR with encrypted bytes
+        try:
+            enc_bytes = bytes.fromhex(encrypted_hex)
+            key = _hl.sha256((bbs_password + nonce).encode("utf-8")).digest()
+            # Extend key to match encrypted length
+            full_key = key * ((len(enc_bytes) // len(key)) + 1)
+            wl_password = bytes(
+                eb ^ kb for eb, kb in zip(enc_bytes, full_key)
+            ).decode("utf-8")
+        except Exception as e:
+            log.warning(f"WLREG decrypt failed for {self.remote_call}: {e}")
+            self._send("Registration failed — decryption error.\r\n")
+            self._show_prompt()
+            return
+
+        if not wl_password:
+            self._send("Empty password received. Registration cancelled.\r\n")
+            self._show_prompt()
+            return
+
+        self._store.set_winlink_registered(self.remote_call, True, wl_password)
+        self._send(
+            "Winlink forwarding enabled for your callsign.\r\n"
+            "The BBS will check Winlink CMS for your mail on each poll.\r\n"
+        )
+        self._show_prompt()
+
     def _cmd_list(self, area: Optional[str] = None):
         msgs = self._store.list_messages(
             area=area, limit=100,
@@ -663,11 +762,14 @@ class InteractiveSession:
             self._send("-" * 60 + "\r\n")
             for i, m in enumerate(msgs):
                 read_flag = " " if m["is_read"] else "*"
+                cms = m.get("cms_status", "")
+                wl_tag = "[WL] " if cms in ("RECEIVED", "QUEUED", "SENT") else ""
+                subj = f"{wl_tag}{m['subject']}"[:30]
                 line = (
                     f"{i+1:<4}{read_flag}"
                     f"{m['from_call']:<10} {m['to_call']:<10} "
                     f"{str(m['date'])[:10]:<12} "
-                    f"{m['subject'][:30]}\r\n"
+                    f"{subj}\r\n"
                 )
                 self._send(line)
                 if (i + 1) % self._pager == 0:
@@ -729,7 +831,7 @@ class InteractiveSession:
             lines.append(line)
 
         body_text = "\r\n".join(lines)
-        self._store.save_message(
+        mid = self._store.save_message(
             from_call=self.remote_call,
             to_call=dest_call.upper(),
             subject=subject.strip(),
@@ -737,7 +839,16 @@ class InteractiveSession:
             instance=self.instance_name,
         )
         self._msgs_recv += 1
-        self._send("Message saved.\r\n")
+
+        # Route to Winlink if destination is an email or non-local callsign
+        if self._outbound_queue:
+            route = self._outbound_queue.route_message(mid)
+            if route == "QUEUED":
+                self._send("Message saved and queued for Winlink delivery.\r\n")
+            else:
+                self._send("Message saved.\r\n")
+        else:
+            self._send("Message saved.\r\n")
         self._show_prompt()
 
     def _cmd_kill(self, idx_str: str):
@@ -1234,6 +1345,19 @@ class InteractiveSession:
                 return
 
     # ── Internal helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _check_internet(timeout: float = 2.0) -> bool:
+        """Quick TCP probe to check internet availability."""
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(("8.8.8.8", 53))
+            s.close()
+            return True
+        except Exception:
+            return False
 
     def _show_prompt(self):
         if self._pending_notify.is_set():

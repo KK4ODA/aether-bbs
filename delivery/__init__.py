@@ -4,8 +4,8 @@ delivery/__init__.py
 Hybrid Three-Tier Resilient Outbound Delivery Architecture
 with Bidirectional Email and Winlink Integration.
 
-Outbound (Tier 1/2/3):
-  Winlink CMS → Multi-provider SMTP → Local MTA failover
+Outbound:
+  Winlink CMS (via Pat) → Multi-provider SMTP failover
 
 Inbound:
   IMAP/POP3 email polling → callsign mapping → MessageStore
@@ -23,7 +23,6 @@ from delivery.backends import (
     OutboundDeliveryBackend,
     WinlinkBackend,
     SMTPBackend,
-    LocalMTABackend,
 )
 from delivery.engine import DeliveryEngine
 from delivery.inbound import (
@@ -41,7 +40,6 @@ __all__ = [
     "OutboundDeliveryBackend",
     "WinlinkBackend",
     "SMTPBackend",
-    "LocalMTABackend",
     "DeliveryEngine",
     "InboundEmailPoller",
     "WinlinkForwardManager",

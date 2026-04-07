@@ -64,23 +64,17 @@ class OutboundDeliveryTab:
         bg_layout = QVBoxLayout(backends_group)
 
         self.widgets["winlink_enabled"] = QCheckBox(
-            "Tier 1 — Winlink CMS (configured in Winlink CMS tab)"
+            "Winlink CMS via Pat (primary — configured in Winlink tab)"
         )
         self.widgets["winlink_enabled"].setChecked(self._config.winlink.enabled)
         self.widgets["winlink_enabled"].setEnabled(False)  # configured elsewhere
         bg_layout.addWidget(self.widgets["winlink_enabled"])
 
         self.widgets["smtp_enabled"] = QCheckBox(
-            "Tier 2 — Cloud SMTP (multi-provider)"
+            "SMTP fallback (used only when Winlink CMS is unavailable)"
         )
         self.widgets["smtp_enabled"].setChecked(od.smtp.enabled)
         bg_layout.addWidget(self.widgets["smtp_enabled"])
-
-        self.widgets["mta_enabled"] = QCheckBox(
-            "Tier 3 — Local MTA (degraded infrastructure fallback)"
-        )
-        self.widgets["mta_enabled"].setChecked(od.local_mta.enabled)
-        bg_layout.addWidget(self.widgets["mta_enabled"])
 
         layout.addWidget(backends_group)
 
@@ -106,13 +100,11 @@ class OutboundDeliveryTab:
         health_group = QGroupBox("Backend Health (live)")
         hg_layout = QVBoxLayout(health_group)
 
-        self.widgets["health_winlink"] = QLabel("Winlink: —")
-        self.widgets["health_smtp"] = QLabel("SMTP: —")
-        self.widgets["health_mta"] = QLabel("Local MTA: —")
+        self.widgets["health_winlink"] = QLabel("Winlink (primary): —")
+        self.widgets["health_smtp"] = QLabel("SMTP (fallback): —")
 
         for lbl in [self.widgets["health_winlink"],
-                     self.widgets["health_smtp"],
-                     self.widgets["health_mta"]]:
+                     self.widgets["health_smtp"]]:
             lbl.setStyleSheet("font-family: monospace; padding: 2px;")
             hg_layout.addWidget(lbl)
 
@@ -202,31 +194,18 @@ class WinlinkDeliveryTab:
 
         form.addRow(transport_group)
 
-        # ── CMS API upgrade info ─────────────────────────────────────────
-        upgrade_group = QGroupBox("CMS API Upgrade Path")
-        ug_layout = QVBoxLayout(upgrade_group)
-
+        # ── Info ─────────────────────────────────────────────────────────
         info = QLabel(
-            "When CMS API credentials are obtained from the Winlink\n"
-            "Development Team:\n"
+            "Winlink delivery uses Pat (getpat.io) to communicate\n"
+            "with the Winlink CMS via internet (telnet/TLS).\n"
             "\n"
-            "1. A CMSApiTransport adapter will be implemented\n"
-            "2. Select 'Direct API' in the transport selector above\n"
-            "3. Enter your API credentials\n"
-            "\n"
-            "No database migration is required.  The message queue,\n"
-            "delivery state, and retry counters all persist across\n"
-            "the transport switch.  The failover engine continues\n"
-            "to operate identically.\n"
-            "\n"
-            "Currently awaiting VARA_BBS client type registration\n"
-            "approval from the Winlink Development Team."
+            "Pat is the primary delivery method for all messages.\n"
+            "SMTP providers (if configured) are used as fallback\n"
+            "for email addresses when Winlink CMS is unavailable."
         )
         info.setStyleSheet("color:#aaa; font-size:9pt;")
         info.setWordWrap(True)
-        ug_layout.addWidget(info)
-
-        form.addRow(upgrade_group)
+        form.addRow(info)
 
         return w
 
@@ -278,6 +257,16 @@ class SMTPProvidersTab:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(6)
+
+        # ── Fallback notice ──────────────────────────────────────────
+        notice = QLabel(
+            "FALLBACK: SMTP providers are used only when Winlink CMS\n"
+            "is unavailable. Winlink (via Pat) is the primary delivery\n"
+            "method for all outbound messages including email addresses."
+        )
+        notice.setStyleSheet("color:#c90; font-size:9pt;")
+        notice.setWordWrap(True)
+        layout.addWidget(notice)
 
         # ── Master-detail splitter ────────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -625,113 +614,9 @@ class SMTPProvidersTab:
             })
         return providers
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Tab 4: Local MTA
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class LocalMTATab:
-    """Local MTA relay configuration tab."""
-
-    def __init__(self, config):
-        self._config = config
-        self.widgets = {}
-
-    def build(self) -> QWidget:
-        mta = self._config.outbound_delivery.local_mta
-        w = QWidget()
-        form = QFormLayout(w)
-
-        # ── Relay settings ───────────────────────────────────────────────
-        relay_group = QGroupBox("Local MTA Relay")
-        rg_form = QFormLayout(relay_group)
-
-        self.widgets["relay_host"] = QLineEdit(mta.relay_host)
-        self.widgets["relay_host"].setPlaceholderText("127.0.0.1")
-        rg_form.addRow("Relay Host:", self.widgets["relay_host"])
-
-        self.widgets["relay_port"] = QSpinBox()
-        self.widgets["relay_port"].setRange(1, 65535)
-        self.widgets["relay_port"].setValue(mta.relay_port)
-        rg_form.addRow("Relay Port:", self.widgets["relay_port"])
-
-        self.widgets["use_auth"] = QCheckBox("Require Authentication")
-        self.widgets["use_auth"].setChecked(mta.use_auth)
-        rg_form.addRow("", self.widgets["use_auth"])
-
-        self.widgets["username"] = QLineEdit(mta.username)
-        rg_form.addRow("Username:", self.widgets["username"])
-
-        self.widgets["password"] = QLineEdit(mta.password)
-        self.widgets["password"].setEchoMode(QLineEdit.EchoMode.Password)
-        rg_form.addRow("Password:", self.widgets["password"])
-
-        self.widgets["sender_email"] = QLineEdit(mta.sender_email)
-        self.widgets["sender_email"].setPlaceholderText("bbs@yourdomain.local")
-        rg_form.addRow("Sender Email:", self.widgets["sender_email"])
-
-        form.addRow(relay_group)
-
-        # ── Test ─────────────────────────────────────────────────────────
-        test_group = QGroupBox("Connection Test")
-        tg_layout = QVBoxLayout(test_group)
-
-        self.widgets["test_btn"] = QPushButton("🔌 Test Local MTA Connection")
-        tg_layout.addWidget(self.widgets["test_btn"])
-
-        self.widgets["test_status"] = QLabel("Not tested")
-        self.widgets["test_status"].setStyleSheet(
-            "font-family: monospace; padding: 4px;"
-        )
-        tg_layout.addWidget(self.widgets["test_status"])
-
-        form.addRow(test_group)
-
-        # ── Queue depth monitor ──────────────────────────────────────────
-        queue_group = QGroupBox("Queue Depth")
-        qg_layout = QVBoxLayout(queue_group)
-
-        self.widgets["queue_depth"] = QLabel("Queue depth: —")
-        self.widgets["queue_depth"].setStyleSheet(
-            "font-family: monospace; padding: 4px;"
-        )
-        qg_layout.addWidget(self.widgets["queue_depth"])
-
-        form.addRow(queue_group)
-
-        # ── Info note ────────────────────────────────────────────────────
-        note = QLabel(
-            "🏠 The Local MTA backend is the last-resort fallback for\n"
-            "scenarios where cloud SMTP providers are unavailable —\n"
-            "DNS infrastructure disruptions, provider outages, or\n"
-            "cyberattack impacts on major email services.\n"
-            "\n"
-            "Configure a locally-running MTA such as Postfix (Linux)\n"
-            "or hMailServer (Windows) for store-and-forward delivery.\n"
-            "Messages will queue locally until the MTA can deliver them."
-        )
-        note.setStyleSheet("color:#aaa; font-size:9pt;")
-        form.addRow("", note)
-
-        return w
-
-    def get_config_values(self) -> dict:
-        return {
-            "relay_host":   self.widgets["relay_host"].text().strip() or "127.0.0.1",
-            "relay_port":   self.widgets["relay_port"].value(),
-            "use_auth":     self.widgets["use_auth"].isChecked(),
-            "username":     self.widgets["username"].text().strip(),
-            "password":     self.widgets["password"].text(),
-            "sender_email": self.widgets["sender_email"].text().strip(),
-        }
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Tab 5: Inbound Email — consolidated two-card layout
-# ═══════════════════════════════════════════════════════════════════════════════
 
 class InboundEmailTab:
-    """Inbound email polling — compact two-section layout."""
+    """Inbound email polling fallback — for when Winlink CMS is unavailable."""
 
     def __init__(self, config):
         self._config = config
@@ -743,15 +628,29 @@ class InboundEmailTab:
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
 
-        # ── Enable toggle at the top ──────────────────────────────────
+        # ── Fallback notice ──────────────────────────────────────────
+        notice = QLabel(
+            "FALLBACK: Inbound email polling provides an alternative path\n"
+            "for receiving internet email when Winlink CMS is unavailable.\n"
+            "\n"
+            "Primary inbound path: Winlink CMS via Pat (automatic).\n"
+            "This fallback polls a custom email domain (e.g. @varabbs.net)\n"
+            "and delivers emails to RF users based on the callsign in the\n"
+            "recipient address."
+        )
+        notice.setStyleSheet("color:#c90; font-size:9pt;")
+        notice.setWordWrap(True)
+        layout.addWidget(notice)
+
+        # ── Enable toggle ─────────────────────────────────────────────
         self.widgets["enabled"] = QCheckBox(
-            "Enable Inbound Email Polling"
+            "Enable Inbound Email Fallback"
         )
         self.widgets["enabled"].setChecked(ie.enabled)
         self.widgets["enabled"].setToolTip(
-            "When enabled, the BBS polls a mailbox on a schedule\n"
-            "and delivers incoming emails to RF users based on\n"
-            "the recipient callsign in the email address."
+            "When enabled, the BBS polls a custom mailbox on a schedule\n"
+            "as a fallback for receiving internet email when Winlink\n"
+            "CMS is unavailable. Requires your own email domain."
         )
         layout.addWidget(self.widgets["enabled"])
 

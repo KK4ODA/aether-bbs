@@ -35,17 +35,6 @@ class SMTPDeliveryConfig(BaseModel):
     providers:  list[SMTPProviderModel] = Field(default_factory=list)
 
 
-class LocalMTAConfig(BaseModel):
-    """Local MTA backend configuration (Tier 3)."""
-    enabled:       bool = False
-    relay_host:    str  = "127.0.0.1"
-    relay_port:    int  = Field(default=25, ge=1, le=65535)
-    use_auth:      bool = False
-    username:      str  = ""
-    password:      str  = ""
-    sender_email:  str  = ""
-
-
 class RoutingOverride(BaseModel):
     """Sysop routing override rule."""
     pattern:  str = ""       # recipient pattern (e.g. "@gmail.com", "EMCOMM")
@@ -102,7 +91,6 @@ class OutboundDeliveryConfig(BaseModel):
 
     # Backend configurations
     smtp:       SMTPDeliveryConfig = Field(default_factory=SMTPDeliveryConfig)
-    local_mta:  LocalMTAConfig     = Field(default_factory=LocalMTAConfig)
 
     # Routing
     routing_overrides: list[RoutingOverride] = Field(default_factory=list)

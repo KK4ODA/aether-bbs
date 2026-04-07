@@ -95,6 +95,23 @@ class PTTConfigDialog(QDialog):
             )
             form.addRow("OmniRig rig:", self._omnirig_rig_combo)
 
+        elif self._method == "FLRIG":
+            info = QLabel(
+                "FLrig must be running and connected to your radio.\n"
+                "Default XML-RPC port is 12345."
+            )
+            info.setStyleSheet("color:#666;")
+            form.addRow(info)
+
+            self._flrig_host_edit = QLineEdit(ptt_cfg.flrig_host)
+            self._flrig_host_edit.setPlaceholderText("127.0.0.1")
+            form.addRow("FLrig host:", self._flrig_host_edit)
+
+            self._flrig_port_spin = QSpinBox()
+            self._flrig_port_spin.setRange(1, 65535)
+            self._flrig_port_spin.setValue(ptt_cfg.flrig_port)
+            form.addRow("FLrig port:", self._flrig_port_spin)
+
         # Watchdog (all methods except VOX)
         if self._method != "VOX":
             self._watchdog_spin = QDoubleSpinBox()
@@ -134,6 +151,9 @@ class PTTConfigDialog(QDialog):
             data["cm108_device"] = self._cm108_edit.text().strip()
         elif self._method == "OMNIRIG":
             data["omnirig_rig"] = self._omnirig_rig_combo.currentIndex() + 1
+        elif self._method == "FLRIG":
+            data["flrig_host"] = self._flrig_host_edit.text().strip() or "127.0.0.1"
+            data["flrig_port"] = self._flrig_port_spin.value()
 
         if self._method != "VOX":
             data["watchdog_timeout"] = self._watchdog_spin.value()
@@ -386,12 +406,10 @@ class SettingsTab(QScrollArea):
             "CONNECTIVITY",
             ("Winlink (Pat)",      self._winlink_tab,       False),
             ("APRS",               self._aprs_tab,          False),
-            ("TNC Broker",         self._broker_tab,        False),
             "DELIVERY",
             ("Outbound Delivery",  self._delivery_tab,      False),
-            ("  SMTP Providers",   self._smtp_providers_tab,  True),
-            ("  Local MTA",        self._local_mta_tab,       True),
-            ("  Inbound Email",    self._inbound_email_tab,   True),
+            ("  SMTP Fallback",    self._smtp_providers_tab,  True),
+            ("  Inbound Email Fallback", self._inbound_email_tab, True),
             ("  Winlink Fwd Mgr",  self._winlink_forward_tab, True),
             "SECURITY & OPS",
             ("Security",           self._security_tab,      False),
@@ -763,7 +781,7 @@ class SettingsTab(QScrollArea):
 
         self._inst_ptt_method = QComboBox()
         self._inst_ptt_method.addItems([
-            "VOX", "RTS", "DTR", "DTRRTS", "HAMLIB", "CM108", "OMNIRIG"
+            "VOX", "RTS", "DTR", "DTRRTS", "HAMLIB", "CM108", "OMNIRIG", "FLRIG"
         ])
         self._inst_ptt_method.setToolTip(
             "PTT control method for VARA HF.\n"
@@ -771,7 +789,8 @@ class SettingsTab(QScrollArea):
             "RTS/DTR = serial port line (DigiRig, etc.)\n"
             "HAMLIB = rigctld over TCP\n"
             "CM108 = RA-Board USB GPIO\n"
-            "OMNIRIG = OmniRig COM server (shared control)"
+            "OMNIRIG = OmniRig COM server (shared control)\n"
+            "FLRIG = FLrig XML-RPC server"
         )
         self._inst_ptt_method.currentTextChanged.connect(
             self._on_inst_field_changed
@@ -914,7 +933,7 @@ class SettingsTab(QScrollArea):
 
         ptt_cfg = d.get("ptt", PTTConfig())
         method = (ptt_cfg.method or "VOX").upper()
-        if method in ("VOX", "RTS", "DTR", "DTRRTS", "HAMLIB", "CM108", "OMNIRIG"):
+        if method in ("VOX", "RTS", "DTR", "DTRRTS", "HAMLIB", "CM108", "OMNIRIG", "FLRIG"):
             self._inst_ptt_method.setCurrentText(method)
 
         self._inst_auto_start.setChecked(d.get("auto_start", False))
@@ -1060,7 +1079,7 @@ class SettingsTab(QScrollArea):
         if method == "VOX":
             self._ptt_test_label.setText(
                 "⚠ PTT method is VOX — nothing to test. "
-                "Select RTS, DTR, HAMLIB, CM108, or OMNIRIG."
+                "Select RTS, DTR, HAMLIB, CM108, OMNIRIG, or FLRIG."
             )
             self._ptt_test_label.setStyleSheet("color:orange;")
             return
@@ -1088,6 +1107,8 @@ class SettingsTab(QScrollArea):
                     hamlib_port=ptt_cfg.hamlib_port,
                     cm108_device=ptt_cfg.cm108_device,
                     omnirig_rig=ptt_cfg.omnirig_rig,
+                    flrig_host=ptt_cfg.flrig_host,
+                    flrig_port=ptt_cfg.flrig_port,
                 )
                 driver.open()
                 driver.set_ptt(True)
@@ -2374,46 +2395,6 @@ class SettingsTab(QScrollArea):
         layout.addStretch()
         return outer
 
-    # ── TNC Broker settings ───────────────────────────────────────────────
-
-    def _broker_tab(self) -> QWidget:
-        w    = QWidget()
-        form = QFormLayout(w)
-        cfg  = self._config.broker
-
-        self._broker_en = QCheckBox("Enable TNC Broker")
-        self._broker_en.setChecked(cfg.enabled)
-
-        self._broker_cmd_port = QSpinBox()
-        self._broker_cmd_port.setRange(1024, 65535)
-        self._broker_cmd_port.setValue(cfg.cmd_port)
-
-        self._broker_data_port = QSpinBox()
-        self._broker_data_port.setRange(1024, 65535)
-        self._broker_data_port.setValue(cfg.data_port)
-
-        form.addRow("", self._broker_en)
-        form.addRow("Proxy CMD Port:",  self._broker_cmd_port)
-        form.addRow("Proxy Data Port:", self._broker_data_port)
-
-        note = QLabel(
-            "The TNC Broker lets external applications (e.g. Winlink Express)\n"
-            "share the VARA connection alongside the BBS.\n"
-            "Point external apps at localhost + the proxy ports above.\n"
-            "\n"
-            "⚠ Changes take effect on next BBS restart."
-        )
-        note.setStyleSheet("color:#aaa;font-size:9pt;")
-        form.addRow("", note)
-
-        warn = QLabel(
-            "⚠ Proxy ports must differ from all VARA instance ports."
-        )
-        warn.setStyleSheet("color:orange;font-size:9pt;")
-        form.addRow("", warn)
-
-        return w
-
     # ── Winlink (Pat) settings ───────────────────────────────────────────
 
     def _winlink_tab(self) -> QWidget:
@@ -2449,12 +2430,6 @@ class SettingsTab(QScrollArea):
         self._wl_auto_launch = QCheckBox("Auto-launch Pat when BBS starts")
         self._wl_auto_launch.setChecked(cfg.auto_launch_pat)
 
-        self._wl_rf_fallback = QCheckBox("Enable RF fallback (VARA FM gateway if no internet)")
-        self._wl_rf_fallback.setChecked(cfg.rf_fallback)
-
-        self._wl_rf_gateway = QLineEdit(cfg.rf_gateway)
-        self._wl_rf_gateway.setPlaceholderText("e.g. WD5EMA-10")
-
         self._wl_interval = QSpinBox()
         self._wl_interval.setRange(1, 1440)
         self._wl_interval.setValue(cfg.poll_interval)
@@ -2465,6 +2440,11 @@ class SettingsTab(QScrollArea):
 
         self._wl_fwd_calls = QLineEdit(", ".join(cfg.forward_calls))
         self._wl_fwd_calls.setPlaceholderText("Comma-separated extra callsigns")
+
+        self._wl_cms_timeout = QSpinBox()
+        self._wl_cms_timeout.setRange(30, 600)
+        self._wl_cms_timeout.setValue(cfg.cms_timeout)
+        self._wl_cms_timeout.setSuffix(" seconds")
 
         # Pat status label
         self._wl_pat_status = QLabel("")
@@ -2498,13 +2478,8 @@ class SettingsTab(QScrollArea):
         poll_form.addRow("Poll Interval:", self._wl_interval)
         poll_form.addRow("", self._wl_auto)
         poll_form.addRow("Forward For:", self._wl_fwd_calls)
+        poll_form.addRow("CMS Timeout:", self._wl_cms_timeout)
         form.addRow(poll_group)
-
-        rf_group = QGroupBox("RF Fallback")
-        rf_form = QFormLayout(rf_group)
-        rf_form.addRow("", self._wl_rf_fallback)
-        rf_form.addRow("RF Gateway:", self._wl_rf_gateway)
-        form.addRow(rf_group)
 
         note = QLabel(
             "Winlink integration uses Pat (getpat.io) to handle all CMS\n"
@@ -2512,7 +2487,8 @@ class SettingsTab(QScrollArea):
             "\n"
             "Pat Executable: path to pat.exe on this system.\n"
             "Auto-launch: start Pat automatically when BBS starts.\n"
-            "RF Fallback: if internet is unavailable, connect via VARA FM gateway.\n"
+            "Pat connects to CMS via internet (telnet). Messages queue\n"
+            "locally if internet is unavailable.\n"
             "\n"
             "Changes take effect on next Save. Pat will be restarted if running."
         )
@@ -2592,11 +2568,6 @@ class SettingsTab(QScrollArea):
         from gui.delivery_tabs import SMTPProvidersTab
         self._smtp_tab = SMTPProvidersTab(self._config)
         return self._smtp_tab.build()
-
-    def _local_mta_tab(self) -> QWidget:
-        from gui.delivery_tabs import LocalMTATab
-        self._mta_tab = LocalMTATab(self._config)
-        return self._mta_tab.build()
 
     def _inbound_email_tab(self) -> QWidget:
         from gui.delivery_tabs import InboundEmailTab
@@ -2680,7 +2651,7 @@ class SettingsTab(QScrollArea):
     def _build_outbound_delivery_config(self):
         from delivery.config import (
             OutboundDeliveryConfig, SMTPDeliveryConfig,
-            SMTPProviderModel, LocalMTAConfig,
+            SMTPProviderModel,
             InboundEmailConfig, WinlinkForwardConfig,
         )
 
@@ -2710,9 +2681,7 @@ class SettingsTab(QScrollArea):
                 ))
 
         # Get MTA config from the MTA tab
-        mta_vals = {}
-        if hasattr(self, "_mta_tab"):
-            mta_vals = self._mta_tab.get_config_values()
+
 
         # Get inbound email config
         ie_vals = {}
@@ -2731,15 +2700,6 @@ class SettingsTab(QScrollArea):
             smtp=SMTPDeliveryConfig(
                 enabled=od_vals.get("smtp_enabled", False),
                 providers=smtp_providers,
-            ),
-            local_mta=LocalMTAConfig(
-                enabled=od_vals.get("mta_enabled", False),
-                relay_host=mta_vals.get("relay_host", "127.0.0.1"),
-                relay_port=mta_vals.get("relay_port", 25),
-                use_auth=mta_vals.get("use_auth", False),
-                username=mta_vals.get("username", ""),
-                password=mta_vals.get("password", ""),
-                sender_email=mta_vals.get("sender_email", ""),
             ),
             inbound_email=InboundEmailConfig(
                 enabled=ie_vals.get("enabled", False),
@@ -2794,7 +2754,7 @@ class SettingsTab(QScrollArea):
                                   LoggingConfig, GUIConfig, InstanceConfig,
                                   PTTConfig, RigControlConfig,
                                   BulletinAreaConfig, ForwardingNeighbourConfig,
-                                  ForwardingConfig, BrokerConfig, AlertConfig,
+                                  ForwardingConfig, AlertConfig,
                                   FileUploadConfig, WinlinkConfig, SecurityConfig)
         from delivery.config import OutboundDeliveryConfig
 
@@ -2950,11 +2910,6 @@ class SettingsTab(QScrollArea):
                 vara_cmd_log=self._vara_cmd_log.isChecked(),
                 chat_log=self._chat_log.isChecked(),
             ),
-            broker=BrokerConfig(
-                enabled=self._broker_en.isChecked(),
-                cmd_port=self._broker_cmd_port.value(),
-                data_port=self._broker_data_port.value(),
-            ),
             winlink=WinlinkConfig(
                 enabled=self._wl_enabled.isChecked(),
                 gateway_callsign=self._wl_callsign.text().strip().upper(),
@@ -2970,8 +2925,7 @@ class SettingsTab(QScrollArea):
                     for c in self._wl_fwd_calls.text().split(",")
                     if c.strip()
                 ],
-                rf_fallback=self._wl_rf_fallback.isChecked(),
-                rf_gateway=self._wl_rf_gateway.text().strip().upper(),
+                cms_timeout=self._wl_cms_timeout.value(),
             ),
             outbound_delivery=self._build_outbound_delivery_config(),
             file_upload=FileUploadConfig(
