@@ -2408,7 +2408,8 @@ class SettingsTab(QScrollArea):
         self._wl_callsign = QLineEdit(cfg.gateway_callsign)
         self._wl_callsign.setPlaceholderText("e.g. KK4ODA-5")
 
-        self._wl_password = QLineEdit(cfg.gateway_password)
+        self._wl_password = QLineEdit(
+            cfg.decrypt_gateway_password(self._config.security.machine_secret))
         self._wl_password.setEchoMode(QLineEdit.EchoMode.Password)
         self._wl_password.setPlaceholderText("Winlink secure login password")
 
@@ -2496,6 +2497,12 @@ class SettingsTab(QScrollArea):
         form.addRow("", note)
 
         return w
+
+    def _encrypt_winlink_password(self, plaintext: str) -> str:
+        """Encrypt a Winlink password for storage in the config file."""
+        from core.crypto import encrypt_value
+        machine = self._config.security.machine_secret
+        return encrypt_value(plaintext, machine)
 
     def _browse_pat_exe(self):
         """Open file dialog to select pat.exe."""
@@ -2913,7 +2920,8 @@ class SettingsTab(QScrollArea):
             winlink=WinlinkConfig(
                 enabled=self._wl_enabled.isChecked(),
                 gateway_callsign=self._wl_callsign.text().strip().upper(),
-                gateway_password=self._wl_password.text(),
+                gateway_password=self._encrypt_winlink_password(
+                    self._wl_password.text()),
                 grid_square=self._wl_grid.text().strip(),
                 pat_exe_path=self._wl_pat_exe.text().strip(),
                 pat_http_addr=self._wl_pat_addr.text().strip() or "localhost:8080",

@@ -268,7 +268,7 @@ class BBSApplication:
         self.cms_poller.update_config(
             enabled=wl.enabled,
             callsign=wl.gateway_callsign,
-            password=wl.gateway_password,
+            password=wl.decrypt_gateway_password(cfg.security.machine_secret),
             grid_square=wl.grid_square,
             pat_exe_path=wl.pat_exe_path,
             pat_http_addr=wl.pat_http_addr,

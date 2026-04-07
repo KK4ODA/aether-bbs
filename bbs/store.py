@@ -579,8 +579,14 @@ class MessageStore:
 
     def set_winlink_registered(self, callsign: str, registered: bool,
                                winlink_password: str = ""):
-        """Set Winlink forwarding opt-in for a callsign with their CMS password."""
+        """Set Winlink forwarding opt-in for a callsign with their CMS password.
+
+        The password is encrypted at rest using the machine_secret.
+        """
+        from core.crypto import encrypt_value
         call = callsign.upper()
+        machine = self._config.security.machine_secret or ""
+        enc_pw = encrypt_value(winlink_password, machine) if winlink_password else ""
         with self._lock:
             self._conn.execute(
                 """INSERT INTO user_prefs (callsign, winlink_registered, winlink_password)
@@ -590,7 +596,7 @@ class MessageStore:
                        winlink_password=CASE WHEN excluded.winlink_registered=1
                            THEN excluded.winlink_password
                            ELSE '' END""",
-                (call, 1 if registered else 0, winlink_password),
+                (call, 1 if registered else 0, enc_pw),
             )
             self._conn.commit()
         log.info(f"Winlink registration for {call}: {'ON' if registered else 'OFF'}")
@@ -599,14 +605,17 @@ class MessageStore:
         """Return all callsigns opted in to Winlink forwarding with passwords.
 
         Returns list of {"callsign": str, "password": str}.
+        Passwords are decrypted from their at-rest encrypted form.
         """
+        from core.crypto import decrypt_value
+        machine = self._config.security.machine_secret or ""
         with self._lock:
             cur = self._conn.execute(
                 "SELECT callsign, winlink_password FROM user_prefs "
                 "WHERE winlink_registered=1"
             )
             return [{"callsign": row["callsign"],
-                     "password": row["winlink_password"]}
+                     "password": decrypt_value(row["winlink_password"], machine)}
                     for row in cur.fetchall()]
 
     def message_count(self) -> int:

@@ -301,7 +301,7 @@ class WinlinkConfig(BaseModel):
     """Winlink integration via Pat client (https://getpat.io)."""
     enabled:            bool       = False
     gateway_callsign:   str        = ""        # mycall for Pat e.g. "KK4ODA-5"
-    gateway_password:   str        = ""        # Winlink secure login password
+    gateway_password:   str        = ""        # encrypted at rest (ENC: prefix)
     grid_square:        str        = ""        # Maidenhead locator
     poll_interval:      int        = Field(default=15, ge=1)   # minutes
     auto_poll:          bool       = True
@@ -311,6 +311,11 @@ class WinlinkConfig(BaseModel):
     pat_http_addr:      str        = "localhost:8080"  # Pat HTTP API address
     auto_launch_pat:    bool       = True      # auto-start Pat with BBS
     cms_timeout:        int        = Field(default=120, ge=30, le=600)  # seconds
+
+    def decrypt_gateway_password(self, machine_secret: str) -> str:
+        """Return the plaintext gateway password, decrypting if stored encrypted."""
+        from core.crypto import decrypt_value
+        return decrypt_value(self.gateway_password, machine_secret)
 
 
 class SecurityConfig(BaseModel):
@@ -489,6 +494,17 @@ class ConfigManager:
             cfg = AppConfig.model_validate(data)
             changed = True
             log.info("Generated machine_secret for password encryption")
+
+        # Encrypt Winlink gateway_password at rest if still plaintext
+        from core.crypto import ENC_PREFIX, encrypt_value
+        machine = data.get("security", {}).get("machine_secret", "")
+        gw_pw = data.get("winlink", {}).get("gateway_password", "")
+        if gw_pw and not gw_pw.startswith(ENC_PREFIX) and machine:
+            enc = encrypt_value(gw_pw, machine)
+            data.setdefault("winlink", {})["gateway_password"] = enc
+            cfg = AppConfig.model_validate(data)
+            changed = True
+            log.info("Encrypted Winlink gateway_password at rest")
 
         return cfg, changed
 
