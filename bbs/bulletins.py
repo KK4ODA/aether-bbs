@@ -539,6 +539,10 @@ class BulletinForwarder:
             log.warning(f"Forwarding TCP error with {neighbour.bbs_callsign}: {e}")
         finally:
             try:
+                f.close()
+            except Exception:
+                pass
+            try:
                 sock.close()
             except Exception:
                 pass

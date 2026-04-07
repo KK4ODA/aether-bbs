@@ -11,6 +11,8 @@ import threading
 from collections import defaultdict, deque
 from typing import Optional
 
+from core.util import base_callsign
+
 
 # Default rate limit profiles: (max_count, window_seconds)
 RATE_LIMITS = {
@@ -63,7 +65,7 @@ class RateLimiter:
         If max_count / window_seconds are not provided, uses defaults
         from RATE_LIMITS for the given event name.
         """
-        base = callsign.upper().split("-")[0]
+        base = base_callsign(callsign)
         now = time.monotonic()
 
         if max_count is None or window_seconds is None:
@@ -86,7 +88,7 @@ class RateLimiter:
 
     def reset(self, callsign: str, event: Optional[str] = None):
         """Reset counters for a callsign."""
-        base = callsign.upper().split("-")[0]
+        base = base_callsign(callsign)
         with self._lock:
             if event:
                 self._counters[base].pop(event, None)

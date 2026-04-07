@@ -34,5 +34,11 @@ backups/
 Thumbs.db
 .DS_Store
 
+# Binaries
+*.exe
+
+# Temp files
+*.tmp.*
+
 # Claude session data
 .claude/

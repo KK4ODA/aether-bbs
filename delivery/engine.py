@@ -116,6 +116,7 @@ class DeliveryEngine:
         self._thread: Optional[threading.Thread] = None
         self._poll_interval = DEFAULT_POLL_SEC
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
         self._failover_log: list[FailoverEvent] = []
 
         # Per-message expiration
@@ -232,6 +233,7 @@ class DeliveryEngine:
     def stop(self) -> None:
         """Stop the delivery engine."""
         self._running = False
+        self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
@@ -249,11 +251,9 @@ class DeliveryEngine:
             except Exception as e:
                 log.error(f"Delivery engine error: {e}", exc_info=True)
 
-            # Sleep in small increments for responsive shutdown
-            for _ in range(int(self._poll_interval)):
-                if not self._running:
-                    break
-                time.sleep(1.0)
+            # Wait for next cycle — wakes immediately on stop()
+            if self._stop_event.wait(timeout=self._poll_interval):
+                break
 
     # ── Queue processing ─────────────────────────────────────────────────────
 
@@ -474,7 +474,8 @@ class DeliveryEngine:
             error=result.error,
         )
         state.record_failover(failover_event)
-        self._failover_log.append(failover_event)
+        with self._lock:
+            self._failover_log.append(failover_event)
 
         log.warning(
             f"MID={mid} delivery failed via {backend_type.value}/{provider_id}: "
@@ -774,7 +775,9 @@ class DeliveryEngine:
 
     def get_failover_log(self, limit: int = 100) -> list[dict]:
         """Return recent failover events."""
-        return [e.to_dict() for e in self._failover_log[-limit:]]
+        with self._lock:
+            snapshot = list(self._failover_log[-limit:])
+        return [e.to_dict() for e in snapshot]
 
     def get_message_delivery_state(self, mid: str) -> Optional[MessageDeliveryState]:
         """Return the full delivery state for a message."""

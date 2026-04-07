@@ -102,12 +102,17 @@ class VARAFMInterface:
                     (self.cfg.host, self.cfg.cmd_port),
                     timeout=CONNECT_TIMEOUT,
                 )
-                self._data_sock = socket.create_connection(
-                    (self.cfg.host, self.cfg.data_port),
-                    timeout=CONNECT_TIMEOUT,
-                )
-                self._cmd_sock.settimeout(None)
-                self._data_sock.settimeout(None)
+                try:
+                    self._data_sock = socket.create_connection(
+                        (self.cfg.host, self.cfg.data_port),
+                        timeout=CONNECT_TIMEOUT,
+                    )
+                except OSError:
+                    self._cmd_sock.close()
+                    self._cmd_sock = None
+                    raise
+                self._cmd_sock.settimeout(30.0)
+                self._data_sock.settimeout(30.0)
                 log.info(
                     f"[{self.cfg.name}] Connected to VARA {'HF' if getattr(self.cfg, 'is_hf', False) else 'FM'} "
                     f"(cmd:{self.cfg.cmd_port} data:{self.cfg.data_port})"

@@ -19,6 +19,11 @@ from core.config import LoggingConfig
 # Shared queue that the GUI log viewer reads from
 gui_log_queue: queue.Queue = queue.Queue(maxsize=2000)
 
+# Formatter constants
+_MAIN_FORMAT   = "%(asctime)s  %(levelname)-8s  %(threadName)-20s  %(name)s  %(message)s"
+_SIMPLE_FORMAT = "%(asctime)s  %(message)s"
+_DATE_FORMAT   = "%Y-%m-%d %H:%M:%S"
+
 
 class GUIQueueHandler(logging.handlers.QueueHandler):
     """Pushes records into the shared GUI queue, dropping oldest if full."""
@@ -39,18 +44,49 @@ VARA_CMD_LOGGER_NAME = "vara_cmd"
 CHAT_LOGGER_NAME     = "chat"
 
 
+def _ensure_log_dir(cfg: LoggingConfig) -> Path:
+    """Create and return the log directory."""
+    log_dir = Path(cfg.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def _setup_rotating_logger(
+    name: str,
+    filename: str,
+    cfg: LoggingConfig,
+    fmt_str: str = _SIMPLE_FORMAT,
+) -> None:
+    """Configure a dedicated rotating logger (non-propagating).
+
+    Idempotent — removes existing handlers before adding new ones.
+    """
+    logger = logging.getLogger(name)
+
+    for h in logger.handlers[:]:
+        h.close()
+        logger.removeHandler(h)
+
+    log_dir = _ensure_log_dir(cfg)
+    fmt = logging.Formatter(fmt_str, datefmt=_DATE_FORMAT)
+    handler = logging.handlers.RotatingFileHandler(
+        log_dir / filename,
+        maxBytes=cfg.max_bytes,
+        backupCount=cfg.backup_count,
+        encoding="utf-8",
+    )
+    handler.setFormatter(fmt)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    logger.propagate = False
+
+
 def setup_logging(cfg: LoggingConfig) -> None:
     """Call once at startup to configure all handlers."""
 
-    log_dir = Path(cfg.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-
+    log_dir = _ensure_log_dir(cfg)
     level = getattr(logging, cfg.level.upper(), logging.INFO)
-
-    fmt = logging.Formatter(
-        "%(asctime)s  %(levelname)-8s  %(threadName)-20s  %(name)s  %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    fmt = logging.Formatter(_MAIN_FORMAT, datefmt=_DATE_FORMAT)
 
     # ── Root logger ─────────────────────────────────────────────────────────
     root = logging.getLogger()
@@ -81,27 +117,9 @@ def setup_logging(cfg: LoggingConfig) -> None:
 
     # ── Packet frame logger ─────────────────────────────────────────────────
     if cfg.packet_log:
-        pkt_fmt = logging.Formatter(
-            "%(asctime)s  %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-        pkt_handler = logging.handlers.RotatingFileHandler(
-            log_dir / "packet_frames.log",
-            maxBytes=cfg.max_bytes,
-            backupCount=cfg.backup_count,
-            encoding="utf-8",
-        )
-        pkt_handler.setFormatter(pkt_fmt)
-
-        pkt_logger = logging.getLogger(PACKET_LOGGER_NAME)
-        pkt_logger.setLevel(logging.DEBUG)
-        pkt_logger.addHandler(pkt_handler)
-        pkt_logger.propagate = False   # don't also write to main log
+        _setup_rotating_logger(PACKET_LOGGER_NAME, "packet_frames.log", cfg)
 
     # ── VARA FM raw command/event logger ────────────────────────────────────
-    # When enabled, every raw line exchanged on the VARA FM TCP command port
-    # is written to vara_cmd.log.  Useful for diagnosing session-timeout issues
-    # or any unexpected VARA FM behaviour without needing to run a packet sniffer.
     update_vara_cmd_logging(cfg)
 
     # ── Chat session logger ──────────────────────────────────────────────────
@@ -120,7 +138,7 @@ def update_vara_cmd_logging(cfg: LoggingConfig) -> None:
     """
     vara_logger = logging.getLogger(VARA_CMD_LOGGER_NAME)
 
-    # Remove any existing file handlers so we don't accumulate duplicates
+    # Remove any existing file handlers
     for h in vara_logger.handlers[:]:
         h.close()
         vara_logger.removeHandler(h)
@@ -128,23 +146,8 @@ def update_vara_cmd_logging(cfg: LoggingConfig) -> None:
     if not cfg.vara_cmd_log:
         return  # disabled — logger has no handlers, all calls are silent no-ops
 
-    log_dir = Path(cfg.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
+    _setup_rotating_logger(VARA_CMD_LOGGER_NAME, "vara_cmd.log", cfg)
 
-    vara_fmt = logging.Formatter(
-        "%(asctime)s  %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    vara_handler = logging.handlers.RotatingFileHandler(
-        log_dir / "vara_cmd.log",
-        maxBytes=cfg.max_bytes,
-        backupCount=cfg.backup_count,
-        encoding="utf-8",
-    )
-    vara_handler.setFormatter(vara_fmt)
-    vara_logger.setLevel(logging.DEBUG)
-    vara_logger.addHandler(vara_handler)
-    vara_logger.propagate = False
 
 def update_chat_logging(cfg: LoggingConfig) -> None:
     """Enable or disable chat session logging at runtime without restart.
@@ -161,20 +164,4 @@ def update_chat_logging(cfg: LoggingConfig) -> None:
     if not cfg.chat_log:
         return
 
-    log_dir = Path(cfg.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    fmt = logging.Formatter(
-        "%(asctime)s  %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler = logging.handlers.RotatingFileHandler(
-        log_dir / "chat.log",
-        maxBytes=cfg.max_bytes,
-        backupCount=cfg.backup_count,
-        encoding="utf-8",
-    )
-    handler.setFormatter(fmt)
-    chat_logger.setLevel(logging.DEBUG)
-    chat_logger.addHandler(handler)
-    chat_logger.propagate = False
+    _setup_rotating_logger(CHAT_LOGGER_NAME, "chat.log", cfg)

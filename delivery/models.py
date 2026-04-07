@@ -8,7 +8,7 @@ details leak into the shared model layer.
 
 import json
 import logging
-from enum import Enum, auto
+from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional

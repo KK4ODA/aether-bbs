@@ -171,7 +171,7 @@ class APRSGateway:
         self._beacon_thread.start()
 
         # Wait for receiver to exit (connection dropped)
-        self._rx_thread.join()
+        self._rx_thread.join(timeout=60)
         self._connected = False
         self._bus.emit(EventType.APRS_IS_DISCONNECTED, source="APRS-IS")
 

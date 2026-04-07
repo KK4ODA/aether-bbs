@@ -119,9 +119,7 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _base_call(callsign: str) -> str:
-    """Strip SSID: KK4ODA-5 → KK4ODA."""
-    return callsign.upper().split("-")[0]
+from core.util import base_callsign as _base_call
 
 
 # ── Password encryption helpers ──────────────────────────────────────────────
@@ -132,24 +130,30 @@ def _base_call(callsign: str) -> str:
 # key stream — lightweight, stdlib-only, and sufficient for a local SQLite
 # file on the sysop's machine.
 
-def _derive_key(machine_secret: str, salt: str) -> bytes:
-    """Derive a 32-byte key from machine_secret and a per-password salt."""
-    return hashlib.sha256(f"pw-enc:{salt}:{machine_secret}".encode()).digest()
+def _derive_key(machine_secret: str, salt: str, length: int = 256) -> bytes:
+    """Derive a key stream from machine_secret and a per-password salt using PBKDF2."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        machine_secret.encode("utf-8"),
+        f"pw-enc:{salt}".encode("utf-8"),
+        iterations=100_000,
+        dklen=length,
+    )
 
 
 def _encrypt_password(password: str, machine_secret: str, salt: str) -> str:
     """Encrypt a password for at-rest storage. Returns base64 string."""
-    key = _derive_key(machine_secret, salt)
     pw_bytes = password.encode("utf-8")
-    encrypted = bytes(pb ^ key[i % len(key)] for i, pb in enumerate(pw_bytes))
+    key = _derive_key(machine_secret, salt, length=len(pw_bytes))
+    encrypted = bytes(pb ^ kb for pb, kb in zip(pw_bytes, key))
     return base64.b64encode(encrypted).decode("ascii")
 
 
 def _decrypt_password(encrypted_b64: str, machine_secret: str, salt: str) -> str:
     """Decrypt a stored password. Returns the raw password string."""
-    key = _derive_key(machine_secret, salt)
     enc_bytes = base64.b64decode(encrypted_b64)
-    decrypted = bytes(eb ^ key[i % len(key)] for i, eb in enumerate(enc_bytes))
+    key = _derive_key(machine_secret, salt, length=len(enc_bytes))
+    decrypted = bytes(eb ^ kb for eb, kb in zip(enc_bytes, key))
     return decrypted.decode("utf-8")
 
 

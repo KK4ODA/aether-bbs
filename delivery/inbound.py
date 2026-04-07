@@ -742,7 +742,7 @@ class WinlinkForwardManager:
     2. Explicit forward_calls from config
     3. Optionally: all registered/approved users from the access controller
 
-    The built list is consumed by PatClient when configuring Pat's
+    The built list is used by PatClient to configure Pat's
     auxiliary_addresses for CMS polling.
 
     CMS limitation: the ;FW line has a practical length limit.

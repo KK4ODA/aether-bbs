@@ -132,9 +132,7 @@ class InteractiveSession:
         # Set when a new message for this station arrives mid-session.
         # Checked at every _show_prompt so the notification appears between commands.
         self._pending_notify = threading.Event()
-        event_bus.subscribe(EventType.MESSAGE_RECEIVED, self._on_message_received)
-        event_bus.subscribe(EventType.SYSOP_CHAT_INITIATE, self._on_sysop_chat_initiate)
-        event_bus.subscribe(EventType.SYSOP_CHAT_END, self._on_sysop_chat_end)
+        # Event subscriptions are registered in run() and cleaned up in its finally block
 
     def _on_sysop_chat_initiate(self, event):
         """Inject the chat-initiate sentinel if this event targets our instance."""
@@ -156,6 +154,11 @@ class InteractiveSession:
         self._session_id = self._store.log_session_start(
             self.remote_call, self.instance_name, "INTERACTIVE"
         )
+
+        # Subscribe to events here (cleaned up in finally block below)
+        self._bus.subscribe(EventType.MESSAGE_RECEIVED, self._on_message_received)
+        self._bus.subscribe(EventType.SYSOP_CHAT_INITIATE, self._on_sysop_chat_initiate)
+        self._bus.subscribe(EventType.SYSOP_CHAT_END, self._on_sysop_chat_end)
 
         try:
             # ── ACCESS CONTROL GATE ──────────────────────────────────
@@ -1092,9 +1095,7 @@ class InteractiveSession:
         sysop_initiated: True when the sysop started the chat from the GUI
                          rather than the remote typing CH.
         """
-        import queue as _queue
-
-        sysop_queue: _queue.Queue = _queue.Queue()
+        sysop_queue: queue.Queue = queue.Queue()
 
         bbs_call = self._config.station.bbs_callsign
         if sysop_initiated:
@@ -1126,7 +1127,7 @@ class InteractiveSession:
             while True:
                 try:
                     msg = sysop_queue.get_nowait()
-                except _queue.Empty:
+                except queue.Empty:
                     break
 
                 if msg is None:
@@ -1160,7 +1161,7 @@ class InteractiveSession:
             # ── Check remote queue ─────────────────────────────────────────
             try:
                 line = self._rx_queue.get(timeout=CHAT_POLL)
-            except _queue.Empty:
+            except queue.Empty:
                 line = None
 
             if line is _RF_DISCONNECTED:

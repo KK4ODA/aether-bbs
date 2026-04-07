@@ -233,7 +233,7 @@ def _validate_file_content(filename: str, data: bytes) -> tuple[bool, str]:
             )
 
     # Check for embedded PE executable in non-exe files
-    if ext not in _NEVER_EXECUTABLE and len(data) >= 2 and data[:2] == b"MZ":
+    if len(data) >= 2 and data[:2] == b"MZ":
         return False, "File contains Windows executable content."
 
     return True, ""
@@ -437,8 +437,8 @@ class FileStore:
 
     @staticmethod
     def _base_callsign(callsign: str) -> str:
-        """Strip SSID to get the base callsign.  KK4ODA-5 → KK4ODA."""
-        return callsign.upper().split("-")[0]
+        from core.util import base_callsign
+        return base_callsign(callsign)
 
     def _check_upload_permission(self, callsign: str) -> tuple[bool, str]:
         """
@@ -655,7 +655,10 @@ class FileStore:
 
         # ── Write to disk (via staging directory) ─────────────────────────
         safe = "".join(c for c in filename if c.isalnum() or c in "._-")
-        if not safe:
+        # Reject path traversal attempts
+        if not safe or safe.startswith(".") or ".." in safe:
+            return False, "Invalid filename."
+        if not any(c.isalnum() for c in safe):
             return False, "Invalid filename."
         area_dir = self._root / area
         area_dir.mkdir(parents=True, exist_ok=True)

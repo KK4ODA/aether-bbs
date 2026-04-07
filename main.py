@@ -6,6 +6,7 @@ import sys
 import signal
 import atexit
 import logging
+import threading
 from pathlib import Path
 
 # Qt must be imported before other app modules that use it
@@ -67,6 +68,7 @@ class BBSApplication:
         self.mode_policy       = None
         self.main_window       = None
         self._shutdown_done    = False
+        self._shutdown_lock    = threading.Lock()
 
     def start(self, app: QApplication) -> int:
         # --- Load configuration ---
@@ -133,21 +135,7 @@ class BBSApplication:
             store=self.message_store,
             event_bus=self.event_bus,
         )
-        wl = self.config.winlink
-        self.cms_poller.update_config(
-            enabled=wl.enabled,
-            callsign=wl.gateway_callsign,
-            password=wl.gateway_password,
-            grid_square=wl.grid_square,
-            pat_exe_path=wl.pat_exe_path,
-            pat_http_addr=wl.pat_http_addr,
-            auto_launch_pat=wl.auto_launch_pat,
-            poll_interval=wl.poll_interval,
-            auto_poll=wl.auto_poll,
-            forward_calls=wl.forward_calls,
-            rf_fallback=wl.rf_fallback,
-            rf_gateway=wl.rf_gateway,
-        )
+        self._apply_winlink_config(self.config)
 
         # CMS notification hooks
         self.cms_notifier = CMSNotifier(self.event_bus)
@@ -266,25 +254,31 @@ class BBSApplication:
         log.info("All subsystems started")
         return app.exec()
 
+    def _apply_winlink_config(self, cfg):
+        """Push Winlink config into the Pat client."""
+        if not self.cms_poller:
+            return
+        wl = cfg.winlink
+        self.cms_poller.update_config(
+            enabled=wl.enabled,
+            callsign=wl.gateway_callsign,
+            password=wl.gateway_password,
+            grid_square=wl.grid_square,
+            pat_exe_path=wl.pat_exe_path,
+            pat_http_addr=wl.pat_http_addr,
+            auto_launch_pat=wl.auto_launch_pat,
+            poll_interval=wl.poll_interval,
+            auto_poll=wl.auto_poll,
+            forward_calls=wl.forward_calls,
+            rf_fallback=wl.rf_fallback,
+            rf_gateway=wl.rf_gateway,
+        )
+
     def _on_config_changed_cms(self, event):
         """Update Pat client when config changes."""
         cfg = (event.data or {}).get("config")
-        if cfg and self.cms_poller:
-            wl = cfg.winlink
-            self.cms_poller.update_config(
-                enabled=wl.enabled,
-                callsign=wl.gateway_callsign,
-                password=wl.gateway_password,
-                grid_square=wl.grid_square,
-                pat_exe_path=wl.pat_exe_path,
-                pat_http_addr=wl.pat_http_addr,
-                auto_launch_pat=wl.auto_launch_pat,
-                poll_interval=wl.poll_interval,
-                auto_poll=wl.auto_poll,
-                forward_calls=wl.forward_calls,
-                rf_fallback=wl.rf_fallback,
-                rf_gateway=wl.rf_gateway,
-            )
+        if cfg:
+            self._apply_winlink_config(cfg)
 
     def _on_config_changed_security(self, event):
         """Update mode policy and rate limiter when config changes."""
@@ -296,9 +290,10 @@ class BBSApplication:
                 self.rate_limiter.multiplier = self.mode_policy.rate_limit_multiplier
 
     def _shutdown(self):
-        if self._shutdown_done:
-            return
-        self._shutdown_done = True
+        with self._shutdown_lock:
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
         log.info("Shutdown initiated")
         try:
             if self.dispatcher:
@@ -346,7 +341,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as _crash:
-        import traceback, os
+        import traceback
         crash_path = Path(__file__).parent / "crash.log"
         with open(crash_path, "w") as _f:
             traceback.print_exc(file=_f)

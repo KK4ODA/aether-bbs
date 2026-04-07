@@ -311,8 +311,9 @@ class SMTPBackend(OutboundDeliveryBackend):
         if not self._providers:
             return BackendHealth.UNAVAILABLE
 
-        healths = [self._provider_health.get(p.provider_id, BackendHealth.HEALTHY)
-                    for p in self._providers if p.enabled]
+        with self._lock:
+            healths = [self._provider_health.get(p.provider_id, BackendHealth.HEALTHY)
+                        for p in self._providers if p.enabled]
 
         if not healths:
             return BackendHealth.UNAVAILABLE
@@ -585,7 +586,8 @@ class SMTPBackend(OutboundDeliveryBackend):
             return len(self._providers) < before
 
     def get_provider_health(self, provider_id: str) -> BackendHealth:
-        return self._provider_health.get(provider_id, BackendHealth.DISABLED)
+        with self._lock:
+            return self._provider_health.get(provider_id, BackendHealth.DISABLED)
 
     def reset_provider_health(self, provider_id: str) -> None:
         """Reset a provider to HEALTHY (manual recovery)."""
