@@ -51,6 +51,11 @@ class EventType(Enum):
     SYSOP_CHAT_INITIATE      = auto()   # sysop started a chat from the GUI
     SYSOP_CHAT_END           = auto()   # sysop stopped a chat from the GUI
 
+    # Converse (multi-user chat room) events
+    CONVERSE_JOIN            = auto()   # user joined a chat room
+    CONVERSE_PART            = auto()   # user left a chat room
+    CONVERSE_MESSAGE         = auto()   # message broadcast in a chat room
+
     # File upload events
     UPLOAD_DENIED            = auto()   # upload permission check failed
 

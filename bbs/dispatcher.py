@@ -175,6 +175,7 @@ class SessionDispatcher:
         rate_limiter=None,
         outbound_queue=None,
         pat_client=None,
+        converse_manager=None,
     ):
         self._cm       = config if isinstance(config, ConfigManager) else None
         self._config   = config if self._cm is None else config.current()
@@ -188,6 +189,7 @@ class SessionDispatcher:
         self._rate_limiter = rate_limiter
         self._outbound_queue = outbound_queue
         self._pat_client = pat_client
+        self._converse = converse_manager
         self._router   = PacketRouter(event_bus)
         self._handlers: dict[str, InstanceSessionHandler] = {}
         self._running  = False
@@ -500,6 +502,15 @@ class SessionDispatcher:
                 handler, remote_call, first_line, mux,
             )
 
+        # Resolve transport label for this instance
+        transport_label = "VARA_FM"
+        for inst in self._live_config.instances:
+            if inst.name == instance_name:
+                transport_label = inst.transport
+                if inst.is_soundmodem:
+                    transport_label = f"SOUNDMODEM ({inst.soundmodem.protocol})"
+                break
+
         session = InteractiveSession(
             remote_call=remote_call,
             instance_name=instance_name,
@@ -516,6 +527,8 @@ class SessionDispatcher:
             rate_limiter=self._rate_limiter,
             outbound_queue=self._outbound_queue,
             pat_client=self._pat_client,
+            transport_label=transport_label,
+            converse_manager=self._converse,
         )
         handler.set_active_session(session)
         session.run()

@@ -375,6 +375,22 @@ class MainWindow(QMainWindow):
         bus.subscribe(EventType.CHAT_MESSAGE, _on_chat_message_bus)
         bus.subscribe(EventType.CHAT_ENDED,   _on_chat_ended_bus)
 
+        # Converse (multi-user chat room) events
+        def _on_converse_join_bus(e):
+            d = e.data or {}
+            room = d.get("room", "?")
+            call = d.get("callsign", "?")
+            log.info(f"CONVERSE {call} joined room {room}")
+
+        def _on_converse_part_bus(e):
+            d = e.data or {}
+            room = d.get("room", "?")
+            call = d.get("callsign", "?")
+            log.info(f"CONVERSE {call} left room {room}")
+
+        bus.subscribe(EventType.CONVERSE_JOIN, _on_converse_join_bus)
+        bus.subscribe(EventType.CONVERSE_PART, _on_converse_part_bus)
+
         bus.subscribe(EventType.SCAN_FREQ_CHANGED,
             lambda e: _emit(b.scan_freq_changed, e.source,
                             (e.data or {}).get("freq_khz", 0.0),

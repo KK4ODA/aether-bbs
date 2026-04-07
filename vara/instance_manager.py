@@ -136,20 +136,47 @@ class VARAFMInstanceManager:
 
     def _start_instance(self, status: InstanceStatus):
         cfg = status.cfg
-        log.info(f"Starting instance '{cfg.name}' ({cfg.frequency_label})")
+        log.info(f"Starting instance '{cfg.name}' ({cfg.frequency_label}) "
+                 f"transport={cfg.transport}")
+
+        # Soundmodem instances use a different broker
+        if cfg.is_soundmodem:
+            self._start_soundmodem_instance(status)
+            return
+
+        self._start_vara_instance(status)
+
+    def _start_soundmodem_instance(self, status: InstanceStatus):
+        """Start a Soundmodem/AX.25 instance via AGWPE or KISS broker."""
+        cfg = status.cfg
+        sm = cfg.soundmodem
+        protocol = sm.protocol.upper()
+
+        if protocol == "AGWPE":
+            from transport.agwpe_broker import AGWPEBroker
+            mux = AGWPEBroker(cfg, self._config, self._bus)
+        else:
+            log.error(f"[{cfg.name}] KISS transport not yet implemented")
+            return
+
+        status.mux = mux
+        threading.Thread(
+            target=mux.connect,
+            name=f"SmConnect-{cfg.name}",
+            daemon=True,
+        ).start()
+
+    def _start_vara_instance(self, status: InstanceStatus):
+        """Start a VARA FM/HF instance."""
+        cfg = status.cfg
 
         from vara.interface import VARAFMState
 
         # If a mux already exists, check its state
         if status.mux is not None:
             if status.mux.state != VARAFMState.DISCONNECTED:
-                # Already connected — nothing to do
                 log.info(f"[{cfg.name}] Already connected, skipping restart")
                 return
-            # Mux exists but TCP is down — re-activate it and reconnect in a
-            # background thread WITHOUT destroying it (destroying it would close
-            # the socket that the simulator is already talking to via its
-            # accept'd client)
             log.info(f"[{cfg.name}] Mux disconnected, reconnecting")
             status.mux.resume()
             threading.Thread(

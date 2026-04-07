@@ -190,9 +190,23 @@ class RigControlConfig(BaseModel):
     channels:      list[ScanChannelConfig] = Field(default_factory=list)
 
 
+class SoundmodemConfig(BaseModel):
+    """Soundmodem / AX.25 packet modem connection settings."""
+    protocol:       str  = Field(default="AGWPE",
+                                  pattern="^(AGWPE|KISS)$")
+    host:           str  = "127.0.0.1"
+    port:           int  = Field(default=8000, ge=1, le=65535)  # AGWPE=8000, KISS varies
+    my_callsign:    str  = ""     # station callsign for AX.25
+    my_ssid:        int  = Field(default=0, ge=0, le=15)
+
+
 class InstanceConfig(BaseModel):
     name:             str  = "Primary"
-    mode:             str  = Field(default="FM", pattern="^(FM|HF)$")  # FM or HF
+    # Transport type: VARA_FM, VARA_HF, or SOUNDMODEM
+    transport:        str  = Field(default="VARA_FM",
+                                    pattern="^(VARA_FM|VARA_HF|SOUNDMODEM)$")
+    # Legacy field — migrated to transport on load
+    mode:             str  = Field(default="", pattern="^(FM|HF|)$")
     enabled:          bool = True
     frequency_label:  str  = ""
     executable_path:  str  = ""
@@ -204,28 +218,37 @@ class InstanceConfig(BaseModel):
     default_path:     str  = ""       # AX.25 digipeater path, blank = direct
     soundcard:        str  = ""
     host:             str  = "127.0.0.1"
-    # VARA HF bandwidth setting — ignored for FM instances.
+    # VARA HF bandwidth setting — ignored for FM and Soundmodem instances.
     # Valid values: 500, 2300, 2750 Hz.
     # None = auto-default: 500 for HF, 2300 for FM.
     bandwidth:        int | None = None
-    # PTT control — required for VARA HF, no-op for FM.
-    # VARA HF does not control PTT itself; it sends PTT ON/OFF events
-    # and expects the connecting application to key the radio.
+    # PTT control — required for VARA HF, no-op for FM and Soundmodem.
     ptt: PTTConfig = Field(default_factory=PTTConfig)
     # Rig control — frequency/mode setting and scanning for HF instances.
     rig_control: RigControlConfig = Field(default_factory=RigControlConfig)
+    # Soundmodem-specific settings (only used when transport=SOUNDMODEM)
+    soundmodem: SoundmodemConfig = Field(default_factory=SoundmodemConfig)
 
     @property
     def is_hf(self) -> bool:
-        return self.mode.upper() == "HF"
+        return self.transport.upper() == "VARA_HF"
+
+    @property
+    def is_soundmodem(self) -> bool:
+        return self.transport.upper() == "SOUNDMODEM"
 
     @model_validator(mode="after")
     def _resolve_defaults(self):
-        if self.cmd_port == self.data_port:
-            raise ValueError(
-                f"cmd_port and data_port must differ (both are {self.cmd_port})"
-            )
-        if self.bandwidth is None:
+        # Migrate legacy mode field to transport
+        if self.mode and not self.transport:
+            self.transport = f"VARA_{self.mode.upper()}"
+            self.mode = ""
+        if self.transport.startswith("VARA"):
+            if self.cmd_port == self.data_port:
+                raise ValueError(
+                    f"cmd_port and data_port must differ (both are {self.cmd_port})"
+                )
+        if self.bandwidth is None and not self.is_soundmodem:
             self.bandwidth = 500 if self.is_hf else 2300
         return self
 
@@ -449,7 +472,7 @@ class ConfigManager:
 
     @staticmethod
     def _strip_defunct_fields(raw: dict) -> dict:
-        """Remove fields that no longer exist in the schema.
+        """Remove/migrate fields before schema validation.
 
         Must run before model_validate so pydantic doesn't reject them.
         """
@@ -457,6 +480,13 @@ class ConfigManager:
         if isinstance(wl, dict):
             wl.pop("poll_interval", None)
             wl.pop("auto_poll", None)
+
+        # Migrate instance mode → transport
+        for inst in raw.get("instances", []):
+            if isinstance(inst, dict) and "mode" in inst and "transport" not in inst:
+                mode = inst.pop("mode", "FM").upper()
+                inst["transport"] = f"VARA_{mode}" if mode in ("FM", "HF") else "VARA_FM"
+
         return raw
 
     def _migrate(self, cfg: AppConfig) -> tuple[AppConfig, bool]:

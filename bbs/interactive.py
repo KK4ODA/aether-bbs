@@ -54,6 +54,7 @@ Commands:\r
   I           - BBS info\r
   P <n>       - Set pager lines (default 20)\r
   CH          - Chat with sysop (if available)\r
+  CHAT [room] - Join multi-user chat room (default: LOCAL)\r
   S user@addr - Send via Winlink (email addresses route automatically)\r
   WL          - Check Winlink CMS for your mail (on-demand)\r
   WLREG       - Register for Winlink email forwarding\r
@@ -106,6 +107,8 @@ class InteractiveSession:
         rate_limiter=None,       # bbs.rate_limiter.RateLimiter
         outbound_queue=None,     # winlink.queue.OutboundQueue
         pat_client=None,         # winlink.pat_client.PatClient for on-demand CMS sync
+        transport_label: str = "VARA_FM",  # transport type for INFO command
+        converse_manager=None,   # bbs.converse.ConversationManager
     ):
         self.remote_call   = remote_call.upper()
         self.instance_name = instance_name
@@ -121,6 +124,8 @@ class InteractiveSession:
         self._rate_limiter = rate_limiter
         self._outbound_queue = outbound_queue
         self._pat_client   = pat_client
+        self._transport_label = transport_label
+        self._converse     = converse_manager
 
         self._rx_queue: queue.Queue[str] = queue.Queue()
         self._running  = True
@@ -508,6 +513,12 @@ class InteractiveSession:
 
         upper = cmd.upper()
 
+        # ── Machine-readable transport query (for terminal auto-detect) ──
+        if upper.startswith(";TRANSPORT"):
+            self._send(f";TRANSPORT {self._transport_label}\r\n")
+            self._show_prompt()
+            return
+
         # ── Rate limiting ────────────────────────────────────────────
         if self._rate_limiter:
             allowed, _ = self._rate_limiter.check(self.remote_call, "command")
@@ -675,6 +686,11 @@ class InteractiveSession:
 
         elif upper == "CH":
             self._cmd_chat()
+
+        elif upper.startswith("CHAT") or upper.startswith("CONVERSE"):
+            parts = cmd.split(None, 1)
+            room_name = parts[1].strip().upper() if len(parts) > 1 else ""
+            self._cmd_converse(room_name)
 
         else:
             self._send(f"Unknown command: {cmd!r}. Type H for help.\r\n")
@@ -1217,11 +1233,87 @@ class InteractiveSession:
                 )
         self._show_prompt()
 
+    def _cmd_converse(self, room_name: str = ""):
+        """Join a multi-user chat room (converse mode)."""
+        if not self._converse:
+            self._send("Chat rooms are not available.\r\n")
+            self._show_prompt()
+            return
+
+        from bbs.converse import Member
+
+        room = self._converse.get_or_create_room(room_name)
+        member = Member(
+            callsign=self.remote_call,
+            send_fn=self._send,
+            member_type="RF",
+            instance=self.instance_name,
+        )
+        room.join(member)
+
+        self._send(
+            f"Joined room {room.name}. "
+            f"{room.member_count} user(s) here.\r\n"
+            f"Type /EXIT to leave, /WHO for member list.\r\n"
+        )
+
+        try:
+            while self._running:
+                try:
+                    line = self._rx_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+
+                if line is _RF_DISCONNECTED:
+                    return
+
+                if line is None:
+                    continue
+
+                text = line.strip()
+                if not text:
+                    continue
+
+                upper = text.upper()
+
+                if upper == "/EXIT" or upper == "/QUIT":
+                    room.part(self.remote_call, "left")
+                    self._send("Left chat room. Type H for help.\r\n")
+                    self._show_prompt()
+                    return
+
+                if upper == "/WHO":
+                    members = room.list_members()
+                    self._send(f"Room {room.name} ({len(members)} users):\r\n")
+                    for m in members:
+                        self._send(f"  {m}\r\n")
+                    continue
+
+                if upper.startswith("/ROOM "):
+                    new_name = text[6:].strip().upper()
+                    if new_name:
+                        room.part(self.remote_call, "switching rooms")
+                        room = self._converse.get_or_create_room(new_name)
+                        room.join(member)
+                        self._send(
+                            f"Switched to room {room.name}. "
+                            f"{room.member_count} user(s) here.\r\n"
+                        )
+                    continue
+
+                # Normal message — broadcast to room
+                room.broadcast(self.remote_call, text)
+
+        finally:
+            # Ensure cleanup on any exit
+            self._converse.remove_user(self.remote_call)
+
     def _cmd_info(self):
         from datetime import datetime
         self._send(f"BBS:       {self._config.station.bbs_callsign}\r\n")
         self._send(f"Sysop:     {self._config.station.sysop_callsign}\r\n")
         self._send(f"Grid:      {self._config.station.grid_square or 'N/A'}\r\n")
+        self._send(f"Transport: {self._transport_label}\r\n")
         self._send(f"Port:      {self.instance_name}\r\n")
         if self._role:
             self._send(f"Access:    {self._role.value}\r\n")

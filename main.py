@@ -115,6 +115,10 @@ class BBSApplication:
             self.config, self.event_bus
         )
 
+        # Multi-user chat room manager
+        from bbs.converse import ConversationManager
+        self.converse_manager = ConversationManager(self.event_bus)
+
         self.dispatcher = SessionDispatcher(
             self.config_manager, self.instance_manager,
             self.message_store, self.event_bus,
@@ -123,6 +127,7 @@ class BBSApplication:
             access_controller=self.access_controller,
             mode_policy=self.mode_policy,
             rate_limiter=self.rate_limiter,
+            converse_manager=self.converse_manager,
         )
 
         if self.config.aprs.enabled:
