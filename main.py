@@ -137,9 +137,10 @@ class BBSApplication:
         )
         self._apply_winlink_config(self.config)
 
-        # Wire outbound queue into dispatcher for Winlink routing
+        # Wire outbound queue and Pat client into dispatcher for Winlink routing
         if self.cms_poller and self.cms_poller.outbound_queue:
             self.dispatcher._outbound_queue = self.cms_poller.outbound_queue
+        self.dispatcher._pat_client = self.cms_poller
 
         # CMS notification hooks
         self.cms_notifier = CMSNotifier(self.event_bus)
@@ -273,8 +274,6 @@ class BBSApplication:
             pat_exe_path=wl.pat_exe_path,
             pat_http_addr=wl.pat_http_addr,
             auto_launch_pat=wl.auto_launch_pat,
-            poll_interval=wl.poll_interval,
-            auto_poll=wl.auto_poll,
             forward_calls=wl.forward_calls,
             cms_timeout=wl.cms_timeout,
         )

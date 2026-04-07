@@ -174,6 +174,7 @@ class SessionDispatcher:
         mode_policy=None,
         rate_limiter=None,
         outbound_queue=None,
+        pat_client=None,
     ):
         self._cm       = config if isinstance(config, ConfigManager) else None
         self._config   = config if self._cm is None else config.current()
@@ -186,6 +187,7 @@ class SessionDispatcher:
         self._policy   = mode_policy
         self._rate_limiter = rate_limiter
         self._outbound_queue = outbound_queue
+        self._pat_client = pat_client
         self._router   = PacketRouter(event_bus)
         self._handlers: dict[str, InstanceSessionHandler] = {}
         self._running  = False
@@ -513,6 +515,7 @@ class SessionDispatcher:
             mode_policy=self._policy,
             rate_limiter=self._rate_limiter,
             outbound_queue=self._outbound_queue,
+            pat_client=self._pat_client,
         )
         handler.set_active_session(session)
         session.run()

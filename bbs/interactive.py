@@ -55,6 +55,7 @@ Commands:\r
   P <n>       - Set pager lines (default 20)\r
   CH          - Chat with sysop (if available)\r
   S user@addr - Send via Winlink (email addresses route automatically)\r
+  WL          - Check Winlink CMS for your mail (on-demand)\r
   WLREG       - Register for Winlink email forwarding\r
   WLOFF       - Unregister from Winlink forwarding\r
   SETPASS <pw>- Set or change your login password\r
@@ -104,6 +105,7 @@ class InteractiveSession:
         mode_policy=None,        # bbs.mode_policy.ModePolicy
         rate_limiter=None,       # bbs.rate_limiter.RateLimiter
         outbound_queue=None,     # winlink.queue.OutboundQueue
+        pat_client=None,         # winlink.pat_client.PatClient for on-demand CMS sync
     ):
         self.remote_call   = remote_call.upper()
         self.instance_name = instance_name
@@ -118,6 +120,7 @@ class InteractiveSession:
         self._policy       = mode_policy
         self._rate_limiter = rate_limiter
         self._outbound_queue = outbound_queue
+        self._pat_client   = pat_client
 
         self._rx_queue: queue.Queue[str] = queue.Queue()
         self._running  = True
@@ -565,6 +568,10 @@ class InteractiveSession:
             self._show_prompt()
             return
 
+        if upper == "WL":
+            self._cmd_wl_poll()
+            return
+
         # ── Access control permission check ──────────────────────────
         if self._access and not self._access.has_permission(self.remote_call, cmd):
             self._send("Permission denied for this command.\r\n")
@@ -745,8 +752,55 @@ class InteractiveSession:
         self._store.set_winlink_registered(self.remote_call, True, wl_password)
         self._send(
             "Winlink forwarding enabled for your callsign.\r\n"
-            "The BBS will check Winlink CMS for your mail on each poll.\r\n"
+            "Use the WL command to check Winlink CMS for your mail.\r\n"
         )
+        self._show_prompt()
+
+    def _cmd_wl_poll(self):
+        """On-demand Winlink CMS check for the connected RF user."""
+        if not self._pat_client or not self._pat_client.is_enabled:
+            self._send("Winlink is not enabled on this BBS.\r\n")
+            self._show_prompt()
+            return
+
+        # Check if user is registered for Winlink
+        prefs = self._store.get_user_prefs(self.remote_call)
+        if not prefs.get("winlink_registered"):
+            self._send(
+                "You are not registered for Winlink forwarding.\r\n"
+                "Use WLREG to register first.\r\n"
+            )
+            self._show_prompt()
+            return
+
+        from core.crypto import decrypt_value
+        enc_pw = prefs.get("winlink_password", "")
+        machine = self._config.security.machine_secret or ""
+        password = decrypt_value(enc_pw, machine)
+        if not password:
+            self._send(
+                "No Winlink password on file. Use WLREG to re-register.\r\n"
+            )
+            self._show_prompt()
+            return
+
+        self._send(
+            "Connecting to Winlink CMS... this may take 30-120 seconds.\r\n"
+            "Please wait.\r\n"
+        )
+
+        result = self._pat_client.poll_for_user(self.remote_call, password)
+
+        if result.error:
+            self._send(f"Winlink sync error: {result.error}\r\n")
+        else:
+            self._send(
+                f"Winlink sync complete: {result.sent} sent, "
+                f"{result.received} new messages received.\r\n"
+            )
+            if result.received > 0:
+                self._send("Type L to list your messages.\r\n")
+
         self._show_prompt()
 
     def _cmd_list(self, area: Optional[str] = None):

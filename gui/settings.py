@@ -2431,14 +2431,6 @@ class SettingsTab(QScrollArea):
         self._wl_auto_launch = QCheckBox("Auto-launch Pat when BBS starts")
         self._wl_auto_launch.setChecked(cfg.auto_launch_pat)
 
-        self._wl_interval = QSpinBox()
-        self._wl_interval.setRange(1, 1440)
-        self._wl_interval.setValue(cfg.poll_interval)
-        self._wl_interval.setSuffix(" minutes")
-
-        self._wl_auto = QCheckBox("Auto-poll on schedule")
-        self._wl_auto.setChecked(cfg.auto_poll)
-
         self._wl_fwd_calls = QLineEdit(", ".join(cfg.forward_calls))
         self._wl_fwd_calls.setPlaceholderText("Comma-separated extra callsigns")
 
@@ -2474,22 +2466,20 @@ class SettingsTab(QScrollArea):
         acct_form.addRow("Grid Square:", self._wl_grid)
         form.addRow(acct_group)
 
-        poll_group = QGroupBox("Polling")
-        poll_form = QFormLayout(poll_group)
-        poll_form.addRow("Poll Interval:", self._wl_interval)
-        poll_form.addRow("", self._wl_auto)
-        poll_form.addRow("Forward For:", self._wl_fwd_calls)
-        poll_form.addRow("CMS Timeout:", self._wl_cms_timeout)
-        form.addRow(poll_group)
+        cms_group = QGroupBox("CMS Settings")
+        cms_form = QFormLayout(cms_group)
+        cms_form.addRow("Forward For:", self._wl_fwd_calls)
+        cms_form.addRow("CMS Timeout:", self._wl_cms_timeout)
+        form.addRow(cms_group)
 
         note = QLabel(
             "Winlink integration uses Pat (getpat.io) to handle all CMS\n"
             "communication including B2F protocol and authentication.\n"
             "\n"
-            "Pat Executable: path to pat.exe on this system.\n"
-            "Auto-launch: start Pat automatically when BBS starts.\n"
-            "Pat connects to CMS via internet (telnet). Messages queue\n"
-            "locally if internet is unavailable.\n"
+            "CMS sync is on-demand only: use 'Poll Now' in the Winlink\n"
+            "panel, or RF users can type WL to check their mail.\n"
+            "This prevents consuming mail that users may want to\n"
+            "retrieve via other Winlink gateways.\n"
             "\n"
             "Changes take effect on next Save. Pat will be restarted if running."
         )
@@ -2926,8 +2916,6 @@ class SettingsTab(QScrollArea):
                 pat_exe_path=self._wl_pat_exe.text().strip(),
                 pat_http_addr=self._wl_pat_addr.text().strip() or "localhost:8080",
                 auto_launch_pat=self._wl_auto_launch.isChecked(),
-                poll_interval=self._wl_interval.value(),
-                auto_poll=self._wl_auto.isChecked(),
                 forward_calls=[
                     c.strip().upper()
                     for c in self._wl_fwd_calls.text().split(",")

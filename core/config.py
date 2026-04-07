@@ -303,8 +303,6 @@ class WinlinkConfig(BaseModel):
     gateway_callsign:   str        = ""        # mycall for Pat e.g. "KK4ODA-5"
     gateway_password:   str        = ""        # encrypted at rest (ENC: prefix)
     grid_square:        str        = ""        # Maidenhead locator
-    poll_interval:      int        = Field(default=15, ge=1)   # minutes
-    auto_poll:          bool       = True
     forward_calls:      list[str]  = Field(default_factory=list)  # extra callsigns
     # Pat-specific settings
     pat_exe_path:       str        = ""        # path to pat.exe
@@ -431,6 +429,7 @@ class ConfigManager:
 
         try:
             raw = tomllib.loads(self._path.read_text(encoding="utf-8"))
+            raw = self._strip_defunct_fields(raw)
             cfg = AppConfig.model_validate(raw)
             cfg, migrated = self._migrate(cfg)
             if migrated:
@@ -447,6 +446,18 @@ class ConfigManager:
             self.save(cfg)
             self._config = cfg
             return cfg
+
+    @staticmethod
+    def _strip_defunct_fields(raw: dict) -> dict:
+        """Remove fields that no longer exist in the schema.
+
+        Must run before model_validate so pydantic doesn't reject them.
+        """
+        wl = raw.get("winlink")
+        if isinstance(wl, dict):
+            wl.pop("poll_interval", None)
+            wl.pop("auto_poll", None)
+        return raw
 
     def _migrate(self, cfg: AppConfig) -> tuple[AppConfig, bool]:
         """Apply known migrations to loaded config. Returns (cfg, changed)."""

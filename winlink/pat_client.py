@@ -108,8 +108,6 @@ class PatClient:
         self._pat_exe_path    = ""
         self._pat_http_addr   = "localhost:8080"
         self._auto_launch_pat = True
-        self._poll_interval   = 15    # minutes
-        self._auto_poll       = True
         self._forward_calls: list[str] = []
         self._cms_timeout     = DEFAULT_CMS_TIMEOUT
 
@@ -124,8 +122,6 @@ class PatClient:
         pat_exe_path:    str    = "",
         pat_http_addr:   str    = "localhost:8080",
         auto_launch_pat: bool   = True,
-        poll_interval:   int    = 15,
-        auto_poll:       bool   = True,
         forward_calls:   Optional[list[str]] = None,
         cms_timeout:     int    = 120,
     ):
@@ -137,8 +133,6 @@ class PatClient:
         self._pat_exe_path    = pat_exe_path
         self._pat_http_addr   = pat_http_addr or "localhost:8080"
         self._auto_launch_pat = auto_launch_pat
-        self._poll_interval   = max(1, poll_interval)
-        self._auto_poll       = auto_poll
         self._forward_calls   = forward_calls or []
         self._cms_timeout     = max(30, min(600, cms_timeout))
 
@@ -179,16 +173,15 @@ class PatClient:
                 # Launch Pat if configured
                 self._launch_pat()
 
-            # Start polling thread
-            if self._auto_poll:
-                self._poll_thread = threading.Thread(
-                    target=self._poll_loop, daemon=True, name="Pat-Poller",
-                )
-                self._poll_thread.start()
+            # Start inbox check thread (local only — CMS sync is on-demand)
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop, daemon=True, name="Pat-InboxCheck",
+            )
+            self._poll_thread.start()
 
         log.info(
-            "Pat client started (enabled=%s, interval=%dmin, exe=%s)",
-            self._enabled, self._poll_interval,
+            "Pat client started (enabled=%s, exe=%s)",
+            self._enabled,
             self._pat_exe_path or "<not set>",
         )
 
@@ -226,6 +219,85 @@ class PatClient:
         if not self._enabled:
             return None
         return self._do_poll()
+
+    def poll_for_user(self, callsign: str, password: str) -> PollResult:
+        """One-shot CMS sync that includes a specific user's callsign.
+
+        Temporarily adds CALL:password to Pat's auxiliary_addresses,
+        runs a CMS sync, then restores the config.  Thread-safe.
+
+        Returns PollResult with sent/received counts or error.
+        """
+        if not self._enabled:
+            return PollResult(error="Winlink is not enabled")
+
+        if not self._lock.acquire(blocking=False):
+            return PollResult(
+                error="CMS sync already in progress. Try again shortly."
+            )
+
+        try:
+            start = time.monotonic()
+
+            self._bus.emit(
+                EventType.CMS_POLL_STARTED,
+                source="winlink",
+                data={"callsign": callsign, "host": "pat"},
+            )
+
+            # Ensure Pat is alive
+            if not self._probe_pat_http():
+                if self._managed or self._auto_launch_pat:
+                    self._launch_pat()
+                    if not self._probe_pat_http():
+                        result = PollResult(error="Pat not running")
+                        self._bus.emit(
+                            EventType.CMS_POLL_COMPLETED, source="winlink",
+                            data={"error": result.error, "sent": 0,
+                                  "received": 0, "duration": 0},
+                        )
+                        return result
+
+            # Temporarily add user to Pat's auxiliary_addresses
+            path = self._pat_config_path()
+            original_config = None
+            if path and os.path.isfile(path):
+                with open(path, "r") as f:
+                    original_config = f.read()
+
+                pcfg = json.loads(original_config)
+                aux = list(pcfg.get("auxiliary_addresses", []))
+                user_entry = f"{callsign.upper()}:{password}" if password else callsign.upper()
+                if user_entry not in aux and callsign.upper() not in aux:
+                    aux.append(user_entry)
+                pcfg["auxiliary_addresses"] = aux
+                with open(path, "w") as f:
+                    json.dump(pcfg, f, indent=2)
+
+            try:
+                result = self._exchange_with_retry()
+            finally:
+                # Always restore original config
+                if original_config is not None and path:
+                    with open(path, "w") as f:
+                        f.write(original_config)
+
+            result.duration = time.monotonic() - start
+
+            self._bus.emit(
+                EventType.CMS_POLL_COMPLETED,
+                source="winlink",
+                data={
+                    "sent":     result.sent,
+                    "received": result.received,
+                    "error":    result.error,
+                    "duration": result.duration,
+                },
+            )
+            return result
+
+        finally:
+            self._lock.release()
 
     def send_message(self, to_addr: str, subject: str, body: str,
                      from_addr: str = "") -> SendResult:
@@ -398,14 +470,9 @@ class PatClient:
             # Set HTTP address
             pcfg["http_addr"] = self._pat_http_addr
 
-            # Set forward callsigns as auxiliary addresses
-            fwd = (
-                self._forward_manager.build_forward_list()
-                if self._forward_manager
-                else self._forward_calls
-            )
-            if fwd:
-                pcfg["auxiliary_addresses"] = fwd
+            # Default config: only manual forward calls (no WLREG users).
+            # Per-user forwarding happens on-demand via poll_for_user().
+            pcfg["auxiliary_addresses"] = self._forward_calls or []
 
             # Ensure telnet connection alias exists
             aliases = pcfg.get("connect_aliases", {})
@@ -639,25 +706,17 @@ class PatClient:
     # ── Poll loop ────────────────────────────────────────────────────────
 
     def _poll_loop(self):
-        """
-        Background thread: full CMS sync on interval, local inbox check
-        every 15 seconds between syncs.
+        """Background thread: check Pat's local inbox every 15 seconds.
+
+        CMS sync is now on-demand only (GUI 'Poll Now' or RF 'WL' command).
+        This loop only reads Pat's local HTTP API — it never contacts CMS.
         """
         while self._running:
             if not self._enabled:
                 time.sleep(5)
                 continue
-
-            # Full CMS sync
-            self._do_poll()
-
-            # Between syncs, keep checking local Pat inbox frequently
-            sync_interval = max(60, self._poll_interval * 60)
-            elapsed = 0
-            while elapsed < sync_interval and self._running and self._enabled:
-                time.sleep(INBOX_CHECK_INTERVAL)
-                elapsed += INBOX_CHECK_INTERVAL
-                self._check_inbox()
+            time.sleep(INBOX_CHECK_INTERVAL)
+            self._check_inbox()
 
     def _do_poll(self) -> Optional[PollResult]:
         """Execute one full CMS sync + inbox check cycle with retry logic."""
