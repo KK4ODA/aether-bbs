@@ -3,17 +3,52 @@ terminal/connection.py
 
 Transport-agnostic connection manager for the VARA BBS Terminal.
 
-Connects to a BBS via either VARA FM or Soundmodem (AGWPE/KISS),
+Connects to a BBS via VARA FM, Soundmodem (AGWPE/KISS), or AETHER HF,
 sends/receives text, and auto-detects the BBS transport type.
 """
 
 import logging
+import os
 import queue
 import threading
 import time
 from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
+
+
+def find_aether_module() -> str:
+    """Locate the AETHER HF modem module.
+
+    Checks:
+      1. Bundled submodule: aether_hf_modem/aether_hf/
+      2. Installed as a Python package (importable)
+
+    Returns path to the aether_hf package, or "" if not found.
+    """
+    import importlib.util
+
+    # Bundled submodule (relative to vara_bbs root)
+    bbs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    submodule = os.path.join(bbs_root, "aether_hf_modem", "aether_hf")
+    if os.path.isdir(submodule) and os.path.isfile(
+            os.path.join(submodule, "__init__.py")):
+        return submodule
+
+    # pip-installed package
+    try:
+        spec = importlib.util.find_spec("aether_hf")
+        if spec and spec.origin:
+            return os.path.dirname(spec.origin)
+    except (ModuleNotFoundError, ValueError):
+        pass
+
+    return ""
+
+
+def is_aether_available() -> bool:
+    """Check if the AETHER HF modem is installed."""
+    return bool(find_aether_module())
 
 
 class TerminalConnection:
@@ -72,6 +107,25 @@ class TerminalConnection:
         log.warning("AGWPE connect timeout")
         client.disconnect()
         return False
+
+    def connect_aether(self, host: str, cmd_port: int, data_port: int,
+                       my_call: str, bbs_call: str) -> bool:
+        """Connect to BBS via AETHER HF modem.
+
+        AETHER exposes a VARA-compatible TCP interface, so this uses
+        the same connection logic as VARA FM. Checks that the AETHER
+        module is available first.
+        """
+        if not is_aether_available():
+            log.error(
+                "AETHER HF modem not installed. "
+                "Initialize the submodule: git submodule update --init"
+            )
+            return False
+
+        # AETHER uses VARA-compatible TCP — connect the same way
+        log.info(f"AETHER HF connect to {bbs_call} via {host}:{cmd_port}")
+        return self.connect_vara(host, cmd_port, data_port, my_call, bbs_call)
 
     def send(self, text: str) -> bool:
         """Send text to the BBS."""

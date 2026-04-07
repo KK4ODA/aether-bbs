@@ -171,25 +171,118 @@ class VARAFMInstanceManager:
             daemon=True,
         ).start()
 
+    def _find_aether_module(self) -> str:
+        """Locate the AETHER HF modem module.
+
+        Checks (in order):
+          1. Bundled submodule: aether_hf_modem/aether_hf/
+          2. Installed as a Python package (importable)
+
+        Returns the path to the aether_hf package directory, or "" if not found.
+        """
+        import os, importlib
+
+        # Check bundled submodule (relative to the BBS root)
+        bbs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        submodule = os.path.join(bbs_root, "aether_hf_modem", "aether_hf")
+        if os.path.isdir(submodule) and os.path.isfile(
+                os.path.join(submodule, "__init__.py")):
+            return submodule
+
+        # Check if installed as a pip package
+        try:
+            spec = importlib.util.find_spec("aether_hf")
+            if spec and spec.origin:
+                return os.path.dirname(spec.origin)
+        except (ModuleNotFoundError, ValueError):
+            pass
+
+        return ""
+
     def _start_aether_instance(self, status: InstanceStatus):
         """Start an AETHER HF modem instance.
 
         AETHER HF exposes a VARA-compatible TCP interface, so from the
         BBS dispatcher's perspective it behaves identically to VARA.
-        The AETHER modem runs as a separate process; we connect to its
-        TCP ports just like we connect to VARA FM.
-        """
-        cfg = status.cfg
-        log.info(f"[{cfg.name}] AETHER HF instance — connecting to "
-                 f"cmd:{cfg.aether.cmd_port} data:{cfg.aether.data_port}")
 
-        # AETHER HF uses the same TCP protocol as VARA, so we reuse
-        # the VARA TNCBroker/interface pointed at AETHER's ports.
-        # Override the ports from the aether config section.
+        If auto_launch is True and the AETHER module is found (bundled
+        submodule or pip-installed), the modem process is started
+        automatically.  Otherwise, the BBS connects to an externally
+        running AETHER instance on the configured TCP ports.
+        """
+        import subprocess, os
+        cfg = status.cfg
+        acfg = cfg.aether
+
+        # ── Check if AETHER is available ──────────────────────────────
+        aether_path = self._find_aether_module()
+        if not aether_path:
+            log.error(
+                f"[{cfg.name}] AETHER HF modem not found. "
+                f"Initialize the git submodule:\n"
+                f"  git submodule update --init\n"
+                f"Or install via pip:\n"
+                f"  pip install aether-hf\n"
+                f"Instance will attempt to connect to an external AETHER "
+                f"process on ports {acfg.cmd_port}/{acfg.data_port}."
+            )
+            self._bus.emit(
+                EventType.VARA_PROCESS_DOWN, source=cfg.name,
+                data={"error": "AETHER HF modem not installed. "
+                      "Run: git submodule update --init"},
+            )
+        else:
+            log.info(f"[{cfg.name}] AETHER HF found at {aether_path}")
+
+        # ── Auto-launch if configured ─────────────────────────────────
+        if acfg.auto_launch and aether_path:
+            # Check if already running on the expected ports
+            if self._port_is_open(cfg.host, acfg.cmd_port):
+                log.info(
+                    f"[{cfg.name}] AETHER already running on "
+                    f"port {acfg.cmd_port} — using external instance"
+                )
+            else:
+                # Launch the AETHER modem as a subprocess
+                modem_root = os.path.dirname(aether_path)
+                cmd = [
+                    "python", "-m", "aether_hf.host.vara_compat",
+                    "--cmd-port", str(acfg.cmd_port),
+                    "--data-port", str(acfg.data_port),
+                ]
+                if acfg.my_callsign:
+                    cmd.extend(["--callsign", acfg.my_callsign])
+                if acfg.mode:
+                    cmd.extend(["--mode", acfg.mode])
+
+                try:
+                    log.info(f"[{cfg.name}] Launching AETHER: {' '.join(cmd)}")
+                    proc = subprocess.Popen(
+                        cmd, cwd=modem_root,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    status.process_state = ProcessState.RUNNING
+                    self._bus.emit(
+                        EventType.VARA_PROCESS_UP, source=cfg.name,
+                        data={"pid": proc.pid, "transport": "AETHER_HF"},
+                    )
+                    time.sleep(2)  # give it time to bind ports
+                except Exception as e:
+                    log.error(f"[{cfg.name}] Failed to launch AETHER: {e}")
+                    self._bus.emit(
+                        EventType.VARA_PROCESS_DOWN, source=cfg.name,
+                        data={"error": str(e)},
+                    )
+
+        # ── Connect to AETHER's VARA-compatible TCP ports ─────────────
+        log.info(f"[{cfg.name}] Connecting to AETHER HF on "
+                 f"cmd:{acfg.cmd_port} data:{acfg.data_port}")
+
         from copy import deepcopy
         aether_cfg = deepcopy(cfg)
-        aether_cfg.cmd_port = cfg.aether.cmd_port
-        aether_cfg.data_port = cfg.aether.data_port
+        aether_cfg.cmd_port = acfg.cmd_port
+        aether_cfg.data_port = acfg.data_port
 
         mux = VARAFMMux(aether_cfg, self._config, self._bus)
         status.mux = mux

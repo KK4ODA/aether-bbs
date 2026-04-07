@@ -202,12 +202,13 @@ class SoundmodemConfig(BaseModel):
 
 class AetherConfig(BaseModel):
     """AETHER HF modem settings."""
-    cmd_port:       int  = Field(default=8400, ge=1, le=65535)
-    data_port:      int  = Field(default=8401, ge=1, le=65535)
-    mode:           str  = Field(default="wide", pattern="^(wide|narrow|emergency)$")
-    my_callsign:    str  = ""
+    cmd_port:         int  = Field(default=8400, ge=1, le=65535)
+    data_port:        int  = Field(default=8401, ge=1, le=65535)
+    mode:             str  = Field(default="wide", pattern="^(wide|narrow|emergency)$")
+    my_callsign:      str  = ""
     audio_device_in:  str  = ""     # sound card input device
     audio_device_out: str  = ""     # sound card output device
+    auto_launch:      bool = True   # auto-start AETHER modem process with BBS
 
 
 class InstanceConfig(BaseModel):
