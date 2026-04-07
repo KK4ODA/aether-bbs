@@ -144,6 +144,11 @@ class VARAFMInstanceManager:
             self._start_soundmodem_instance(status)
             return
 
+        # AETHER HF instances use the AETHER modem broker
+        if cfg.is_aether:
+            self._start_aether_instance(status)
+            return
+
         self._start_vara_instance(status)
 
     def _start_soundmodem_instance(self, status: InstanceStatus):
@@ -163,6 +168,35 @@ class VARAFMInstanceManager:
         threading.Thread(
             target=mux.connect,
             name=f"SmConnect-{cfg.name}",
+            daemon=True,
+        ).start()
+
+    def _start_aether_instance(self, status: InstanceStatus):
+        """Start an AETHER HF modem instance.
+
+        AETHER HF exposes a VARA-compatible TCP interface, so from the
+        BBS dispatcher's perspective it behaves identically to VARA.
+        The AETHER modem runs as a separate process; we connect to its
+        TCP ports just like we connect to VARA FM.
+        """
+        cfg = status.cfg
+        log.info(f"[{cfg.name}] AETHER HF instance — connecting to "
+                 f"cmd:{cfg.aether.cmd_port} data:{cfg.aether.data_port}")
+
+        # AETHER HF uses the same TCP protocol as VARA, so we reuse
+        # the VARA TNCBroker/interface pointed at AETHER's ports.
+        # Override the ports from the aether config section.
+        from copy import deepcopy
+        aether_cfg = deepcopy(cfg)
+        aether_cfg.cmd_port = cfg.aether.cmd_port
+        aether_cfg.data_port = cfg.aether.data_port
+
+        mux = VARAFMMux(aether_cfg, self._config, self._bus)
+        status.mux = mux
+
+        threading.Thread(
+            target=mux.connect,
+            name=f"AetherConnect-{cfg.name}",
             daemon=True,
         ).start()
 

@@ -30,6 +30,7 @@ class TransportType(Enum):
     VARA_FM     = "VARA_FM"
     VARA_HF     = "VARA_HF"
     SOUNDMODEM  = "SOUNDMODEM"
+    AETHER_HF   = "AETHER_HF"
 
 
 @runtime_checkable

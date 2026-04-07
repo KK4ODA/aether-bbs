@@ -200,11 +200,21 @@ class SoundmodemConfig(BaseModel):
     my_ssid:        int  = Field(default=0, ge=0, le=15)
 
 
+class AetherConfig(BaseModel):
+    """AETHER HF modem settings."""
+    cmd_port:       int  = Field(default=8400, ge=1, le=65535)
+    data_port:      int  = Field(default=8401, ge=1, le=65535)
+    mode:           str  = Field(default="wide", pattern="^(wide|narrow|emergency)$")
+    my_callsign:    str  = ""
+    audio_device_in:  str  = ""     # sound card input device
+    audio_device_out: str  = ""     # sound card output device
+
+
 class InstanceConfig(BaseModel):
     name:             str  = "Primary"
-    # Transport type: VARA_FM, VARA_HF, or SOUNDMODEM
+    # Transport type: VARA_FM, VARA_HF, SOUNDMODEM, or AETHER_HF
     transport:        str  = Field(default="VARA_FM",
-                                    pattern="^(VARA_FM|VARA_HF|SOUNDMODEM)$")
+                                    pattern="^(VARA_FM|VARA_HF|SOUNDMODEM|AETHER_HF)$")
     # Legacy field — migrated to transport on load
     mode:             str  = Field(default="", pattern="^(FM|HF|)$")
     enabled:          bool = True
@@ -228,14 +238,20 @@ class InstanceConfig(BaseModel):
     rig_control: RigControlConfig = Field(default_factory=RigControlConfig)
     # Soundmodem-specific settings (only used when transport=SOUNDMODEM)
     soundmodem: SoundmodemConfig = Field(default_factory=SoundmodemConfig)
+    # AETHER HF modem settings (only used when transport=AETHER_HF)
+    aether: AetherConfig = Field(default_factory=AetherConfig)
 
     @property
     def is_hf(self) -> bool:
-        return self.transport.upper() == "VARA_HF"
+        return self.transport.upper() in ("VARA_HF", "AETHER_HF")
 
     @property
     def is_soundmodem(self) -> bool:
         return self.transport.upper() == "SOUNDMODEM"
+
+    @property
+    def is_aether(self) -> bool:
+        return self.transport.upper() == "AETHER_HF"
 
     @model_validator(mode="after")
     def _resolve_defaults(self):
