@@ -175,12 +175,22 @@ class BBSStatusPanel(QWidget):
         aprs_layout.setSpacing(1)
         aprs_row1 = QHBoxLayout()
         self._aprs_status_lbl = QLabel("Status: —")
+        self._aprs_status_lbl.setToolTip(
+            "APRS-IS connection status. When connected, the BBS\n"
+            "periodically beacons its position and status to the\n"
+            "APRS Internet Service so other operators can find it."
+        )
         aprs_row1.addWidget(self._aprs_status_lbl)
         aprs_row1.addStretch()
         aprs_layout.addLayout(aprs_row1)
         aprs_row2 = QHBoxLayout()
         self._aprs_last_lbl = QLabel("Last beacon: —")
         self._aprs_last_lbl.setStyleSheet("color:#888;font-size:9pt;")
+        self._aprs_last_lbl.setToolTip(
+            "Timestamp of the last APRS beacon sent.\n"
+            "Beacons advertise your BBS callsign, frequency,\n"
+            "and status on the APRS network."
+        )
         self._aprs_send_btn = QPushButton("Send Beacon Now")
         self._aprs_send_btn.setFixedHeight(22)
         self._aprs_send_btn.setToolTip(
@@ -285,6 +295,11 @@ class BBSStatusPanel(QWidget):
         self._upload_denied_lbl.setStyleSheet(
             "color:#e74c3c;font-size:9pt;font-weight:bold;padding:4px;"
         )
+        self._upload_denied_lbl.setToolTip(
+            "Uploads may be denied if the user's role lacks\n"
+            "upload privileges (only TRUSTED and SYSOP can upload)\n"
+            "or if the file exceeds the configured size limit."
+        )
         self._upload_denied_lbl.setVisible(False)
         layout.addWidget(self._upload_denied_lbl)
         self._upload_denied_timer = QTimer(self)
@@ -298,6 +313,11 @@ class BBSStatusPanel(QWidget):
         self._access_request_lbl.setWordWrap(True)
         self._access_request_lbl.setStyleSheet(
             "color:#f39c12;font-size:9pt;font-weight:bold;padding:4px;"
+        )
+        self._access_request_lbl.setToolTip(
+            "Shown when a new callsign connects and requests\n"
+            "BBS access. The sysop must approve or block the\n"
+            "user in the User Management table below."
         )
         self._access_request_lbl.setVisible(False)
         layout.addWidget(self._access_request_lbl)
@@ -323,6 +343,14 @@ class BBSStatusPanel(QWidget):
         self._user_filter = QComboBox()
         self._user_filter.addItems(
             ["All", "PENDING", "APPROVED", "TRUSTED", "BLOCKED", "SYSOP"]
+        )
+        self._user_filter.setToolTip(
+            "Filter users by access role:\n"
+            "  PENDING — awaiting sysop approval\n"
+            "  APPROVED — standard BBS access\n"
+            "  TRUSTED — can upload files and post bulletins\n"
+            "  BLOCKED — denied access\n"
+            "  SYSOP — full administrative privileges"
         )
         self._user_filter.currentTextChanged.connect(self._force_refresh_user_table)
         filter_row.addWidget(QLabel("Filter:"))

@@ -70,6 +70,11 @@ class WinlinkPanel(QWidget):
 
         self._status_label = QLabel("Disabled")
         self._status_label.setStyleSheet("color: #888; font-weight: bold;")
+        self._status_label.setToolTip(
+            "Winlink CMS connection status.\n"
+            "OK = last poll succeeded, Error = CMS unreachable,\n"
+            "Disabled = Winlink integration is turned off."
+        )
         status_row.addWidget(self._status_label)
         status_row.addStretch()
         inner.addLayout(status_row)
@@ -91,6 +96,10 @@ class WinlinkPanel(QWidget):
 
         self._queue_label = QLabel("Queue: 0")
         self._queue_label.setStyleSheet("color: #aaa; font-size: 11px; font-weight: normal;")
+        self._queue_label.setToolTip(
+            "Number of outbound messages waiting to be\n"
+            "sent to the Winlink CMS on the next poll."
+        )
         info.addWidget(self._queue_label)
 
         inner.addLayout(info)
@@ -110,6 +119,10 @@ class WinlinkPanel(QWidget):
 
         self._poll_btn = QPushButton("Poll Now")
         self._poll_btn.setFixedWidth(90)
+        self._poll_btn.setToolTip(
+            "Check the Winlink CMS for pending inbound mail\n"
+            "and send any queued outbound messages now."
+        )
         self._poll_btn.setStyleSheet(
             "QPushButton { background: #2C3E50; color: white; padding: 4px 10px; "
             "border: none; border-radius: 4px; font-size: 11px; font-weight: 600; } "
@@ -125,6 +138,11 @@ class WinlinkPanel(QWidget):
         self._error_label = QLabel("")
         self._error_label.setStyleSheet(
             "color: #e74c3c; font-size: 11px; padding: 4px 0px; font-weight: normal;"
+        )
+        self._error_label.setToolTip(
+            "Last error from the Winlink CMS connection.\n"
+            "Common causes: network timeout, invalid credentials,\n"
+            "or Pat client not installed."
         )
         self._error_label.setWordWrap(True)
         self._error_label.hide()

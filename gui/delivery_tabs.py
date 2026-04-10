@@ -64,16 +64,23 @@ class OutboundDeliveryTab:
         bg_layout = QVBoxLayout(backends_group)
 
         self.widgets["winlink_enabled"] = QCheckBox(
-            "Winlink CMS via Pat (primary — configured in Winlink tab)"
+            "Winlink CMS via Pat (primary)"
         )
         self.widgets["winlink_enabled"].setChecked(self._config.winlink.enabled)
-        self.widgets["winlink_enabled"].setEnabled(False)  # configured elsewhere
+        self.widgets["winlink_enabled"].setToolTip(
+            "Enable Winlink CMS as a delivery backend.\n"
+            "Also configured in the Winlink (Pat) settings tab."
+        )
         bg_layout.addWidget(self.widgets["winlink_enabled"])
 
         self.widgets["smtp_enabled"] = QCheckBox(
             "SMTP fallback (used only when Winlink CMS is unavailable)"
         )
         self.widgets["smtp_enabled"].setChecked(od.smtp.enabled)
+        self.widgets["smtp_enabled"].setToolTip(
+            "When enabled, email-addressed messages fall back to\n"
+            "SMTP providers if the Winlink CMS is unreachable."
+        )
         bg_layout.addWidget(self.widgets["smtp_enabled"])
 
         layout.addWidget(backends_group)
@@ -86,12 +93,20 @@ class OutboundDeliveryTab:
         self.widgets["poll_seconds"].setRange(5, 3600)
         self.widgets["poll_seconds"].setValue(od.engine_poll_seconds)
         self.widgets["poll_seconds"].setSuffix(" seconds")
+        self.widgets["poll_seconds"].setToolTip(
+            "How often the delivery engine checks the outbound\n"
+            "queue for new messages to send (in seconds)."
+        )
         eg_form.addRow("Queue Poll Interval:", self.widgets["poll_seconds"])
 
         self.widgets["expiry_days"] = QSpinBox()
         self.widgets["expiry_days"].setRange(1, 365)
         self.widgets["expiry_days"].setValue(od.message_expiry_days)
         self.widgets["expiry_days"].setSuffix(" days")
+        self.widgets["expiry_days"].setToolTip(
+            "Messages that remain undelivered after this many\n"
+            "days are marked as expired and no longer retried."
+        )
         eg_form.addRow("Message Expiry:", self.widgets["expiry_days"])
 
         layout.addWidget(engine_group)
@@ -140,13 +155,58 @@ class OutboundDeliveryTab:
         layout.addStretch()
         return w
 
+    def set_delivery_engine(self, engine):
+        """Wire the delivery engine for live health and queue updates."""
+        self._engine = engine
+        self._refresh_health()  # initial update
+
+    def start_health_timer(self):
+        """Start periodic health refresh. Call after build() and set_delivery_engine()."""
+        from PyQt6.QtCore import QTimer
+        self._health_timer = QTimer()
+        self._health_timer.timeout.connect(self._refresh_health)
+        self._health_timer.start(3000)  # refresh every 3s
+
+    def _refresh_health(self):
+        """Update health indicators and queue depth from the engine."""
+        if not hasattr(self, "_engine") or not self._engine:
+            return
+        try:
+            health = self._engine.get_backend_health_summary()
+            wl = health.get("WINLINK", "—")
+            smtp = health.get("SMTP", "—")
+            color_map = {
+                "HEALTHY": "#57f287", "DEGRADED": "#f0b232",
+                "UNAVAILABLE": "#ed4245", "DISABLED": "#888",
+            }
+            wl_color = color_map.get(wl, "#888")
+            smtp_color = color_map.get(smtp, "#888")
+            self.widgets["health_winlink"].setText(f"Winlink (primary): {wl}")
+            self.widgets["health_winlink"].setStyleSheet(
+                f"color:{wl_color}; font-family:monospace; padding:2px;")
+            self.widgets["health_smtp"].setText(f"SMTP (fallback): {smtp}")
+            self.widgets["health_smtp"].setStyleSheet(
+                f"color:{smtp_color}; font-family:monospace; padding:2px;")
+
+            # Queue depth
+            stats = self._engine.get_queue_depth()
+            pending = stats.get("PENDING", 0)
+            attempting = stats.get("ATTEMPTING", 0)
+            failed = stats.get("FAILED", 0)
+            delivered = stats.get("DELIVERED", 0)
+            self.widgets["queue_display"].setText(
+                f"PENDING: {pending}  |  ATTEMPTING: {attempting}  "
+                f"|  FAILED: {failed}  |  DELIVERED: {delivered}"
+            )
+        except Exception:
+            pass
+
     def get_config_values(self) -> dict:
         return {
             "engine_enabled":      self.widgets["engine_enabled"].isChecked(),
             "engine_poll_seconds": self.widgets["poll_seconds"].value(),
             "message_expiry_days": self.widgets["expiry_days"].value(),
             "smtp_enabled":        self.widgets["smtp_enabled"].isChecked(),
-            "mta_enabled":         self.widgets["mta_enabled"].isChecked(),
         }
 
 
@@ -370,6 +430,7 @@ class SMTPProvidersTab:
 
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("smtp.example.com")
+        self._host_edit.setToolTip("SMTP server hostname (e.g. smtp.gmail.com).")
         self._host_edit.textChanged.connect(self._on_field_changed)
         sf.addRow("Host:", self._host_edit)
 
@@ -380,11 +441,17 @@ class SMTPProvidersTab:
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
         self._port_spin.setValue(587)
+        self._port_spin.setToolTip("SMTP port. Common: 587 (STARTTLS), 465 (SSL), 25 (plain).")
         self._port_spin.valueChanged.connect(self._on_field_changed)
         pr_layout.addWidget(self._port_spin)
         pr_layout.addWidget(QLabel("TLS:"))
         self._tls_combo = QComboBox()
         self._tls_combo.addItems(["STARTTLS", "SSL", "NONE"])
+        self._tls_combo.setToolTip(
+            "STARTTLS — upgrade plain connection to TLS (port 587)\n"
+            "SSL — connect over TLS from the start (port 465)\n"
+            "NONE — no encryption (not recommended)"
+        )
         self._tls_combo.currentTextChanged.connect(self._on_field_changed)
         pr_layout.addWidget(self._tls_combo)
         pr_layout.addStretch()
@@ -419,11 +486,16 @@ class SMTPProvidersTab:
 
         self._sender_email = QLineEdit()
         self._sender_email.setPlaceholderText("bbs@yourdomain.com")
+        self._sender_email.setToolTip("From address shown to recipients of outbound email.")
         self._sender_email.textChanged.connect(self._on_field_changed)
         xf.addRow("Sender email:", self._sender_email)
 
         self._sender_name = QLineEdit()
         self._sender_name.setPlaceholderText("VARA BBS")
+        self._sender_name.setToolTip(
+            "Display name shown to email recipients\n"
+            "(e.g. 'VARA BBS' or your callsign)."
+        )
         self._sender_name.textChanged.connect(self._on_field_changed)
         xf.addRow("Sender name:", self._sender_name)
 
@@ -431,6 +503,10 @@ class SMTPProvidersTab:
 
         # Options
         self._enabled_chk = QCheckBox("Enabled")
+        self._enabled_chk.setToolTip(
+            "Enable or disable this SMTP provider.\n"
+            "Disabled providers are skipped during delivery."
+        )
         self._enabled_chk.stateChanged.connect(self._on_field_changed)
         dl.addWidget(self._enabled_chk)
 
@@ -628,18 +704,31 @@ class InboundEmailTab:
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
 
-        # ── Fallback notice ──────────────────────────────────────────
+        # ── How it works ─────────────────────────────────────────────
         notice = QLabel(
-            "FALLBACK: Inbound email polling provides an alternative path\n"
-            "for receiving internet email when Winlink CMS is unavailable.\n"
-            "\n"
-            "Primary inbound path: Winlink CMS via Pat (automatic).\n"
-            "This fallback polls a custom email domain (e.g. @varabbs.net)\n"
-            "and delivers emails to RF users based on the callsign in the\n"
-            "recipient address."
+            "<b>How Inbound Email Works</b><br><br>"
+            "The BBS polls a single email inbox and delivers messages to "
+            "RF users based on the callsign in the recipient address. "
+            "Internet users can send email to your BBS users without "
+            "needing a Winlink account.<br><br>"
+            "<b>Flow:</b> Internet sender emails "
+            "<code>yourmail+BRECKEN@gmail.com</code> &rarr; arrives in "
+            "your Gmail inbox &rarr; BBS polls it &rarr; extracts "
+            "<code>BRECKEN</code> from the address &rarr; stores as a "
+            "BBS message &rarr; BRECKEN reads it next time they connect "
+            "over RF.<br><br>"
+            "<b>Gmail Plus-Addressing (no custom domain needed):</b><br>"
+            "Gmail delivers <code>you+anything@gmail.com</code> to "
+            "<code>you@gmail.com</code> automatically. The BBS reads "
+            "the <code>+callsign</code> part to route the message.<br>"
+            "Set <b>BBS Domain</b> below to <code>gmail.com</code> and "
+            "give each RF user an address like "
+            "<code>youraccount+CALLSIGN@gmail.com</code>.<br><br>"
+            "<i>One inbox serves all BBS users. No per-user setup needed.</i>"
         )
-        notice.setStyleSheet("color:#c90; font-size:9pt;")
+        notice.setStyleSheet("color:#b5bac1; font-size:9pt;")
         notice.setWordWrap(True)
+        notice.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(notice)
 
         # ── Enable toggle ─────────────────────────────────────────────
@@ -874,6 +963,30 @@ class WinlinkForwardTab:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
+
+        # ── How it works ─────────────────────────────────────────────
+        notice = QLabel(
+            "<b>What the ;FW List Does</b><br><br>"
+            "When your BBS connects to Winlink CMS, it sends a <code>;FW</code> "
+            "line listing the callsigns it accepts mail for. The CMS then "
+            "routes any Winlink messages for those callsigns to your BBS.<br><br>"
+            "<b>Example:</b> If BRECKEN is on the list, Winlink mail addressed "
+            "to BRECKEN is delivered to your BBS. BRECKEN reads it next time "
+            "they connect over RF.<br><br>"
+            "<span style='color:#ed4245;'><b>Warning — Conflicts with direct "
+            "Winlink access:</b></span><br>"
+            "If a user has their own Winlink account and checks it "
+            "independently (e.g. via VARA TERM), <b>do not add their callsign "
+            "to the forward list</b>. Your BBS would claim their mail before "
+            "they can pull it themselves.<br><br>"
+            "<b>Recommended:</b> Use <b>Manual</b> mode and only forward for "
+            "<b>tactical addresses</b> (BRECKEN, SHELTER, etc.) that exist "
+            "only on your BBS and don't have independent Winlink accounts."
+        )
+        notice.setStyleSheet("color:#b5bac1; font-size:9pt;")
+        notice.setWordWrap(True)
+        notice.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(notice)
 
         # ── Configuration card ────────────────────────────────────────
         config_group = QGroupBox("Forward List Configuration")

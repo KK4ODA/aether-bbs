@@ -377,6 +377,14 @@ class SecurityConfig(BaseModel):
     allow_plaintext_auth:    bool = True
 
 
+class UpdaterConfig(BaseModel):
+    """Software auto-update settings (git-based)."""
+    check_on_startup:           bool = True
+    include_aether:             bool = False   # also update AETHER HF submodule
+    auto_check_interval_hours:  int  = Field(default=0, ge=0, le=168)  # 0 = startup only
+    branch:                     str  = "master"
+
+
 class AppConfig(BaseModel):
     station:   StationConfig   = Field(default_factory=StationConfig)
     bbs:       BBSConfig       = Field(default_factory=BBSConfig)
@@ -388,6 +396,7 @@ class AppConfig(BaseModel):
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     file_upload: FileUploadConfig = Field(default_factory=FileUploadConfig)
     security:  SecurityConfig     = Field(default_factory=SecurityConfig)
+    updater:   UpdaterConfig      = Field(default_factory=UpdaterConfig)
     outbound_delivery: Any = Field(default_factory=lambda: _get_delivery_config_class()())
     instances: list[InstanceConfig] = Field(
         default_factory=lambda: [InstanceConfig()]

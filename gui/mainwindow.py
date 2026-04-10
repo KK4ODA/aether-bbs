@@ -58,6 +58,10 @@ class EventSignalBridge(QObject):
     chat_ended                = pyqtSignal(str, str)            # instance, reason
     scan_freq_changed         = pyqtSignal(str, float, int, int)  # instance, freq_khz, ch_index, total
 
+    # Software update signals
+    update_available = pyqtSignal(object)   # UpdateCheckResult
+    update_failed    = pyqtSignal(str)      # error message
+
 
 class MainWindow(QMainWindow):
 
@@ -74,6 +78,7 @@ class MainWindow(QMainWindow):
         cms_poller=None,
         access_controller=None,
         notifiers=None,
+        delivery_engine=None,
     ):
         super().__init__()
         self._cm      = config_manager
@@ -86,6 +91,7 @@ class MainWindow(QMainWindow):
         self._cms_poller = cms_poller
         self._access  = access_controller
         self._notifiers = notifiers or {}
+        self._delivery_engine = delivery_engine
         self._bus     = event_bus
 
         self._bridge  = EventSignalBridge(self)
@@ -200,7 +206,8 @@ class MainWindow(QMainWindow):
         # ── Tab 3: Settings (unchanged) ───────────────────────────────
         self._tabs.addTab(
             SettingsTab(self._cm, self._config, self._bus,
-                       notifiers=self._notifiers, parent=self),
+                       notifiers=self._notifiers,
+                       delivery_engine=self._delivery_engine, parent=self),
             "Settings"
         )
 
@@ -247,6 +254,19 @@ class MainWindow(QMainWindow):
         self._inet_label.setToolTip("Internet connectivity status")
         self._status_bar.addPermanentWidget(self._inet_label)
 
+        # Update-available indicator (clickable)
+        self._update_label = QLabel("")
+        self._update_label.setStyleSheet(
+            f"color:{YELLOW}; font-size:9pt; font-weight:bold;"
+        )
+        self._update_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_label.setToolTip("Click to view available update")
+        self._update_label.hide()
+        self._update_label.mousePressEvent = lambda _ev: self._show_update_dialog()
+        self._status_bar.addPermanentWidget(self._update_label)
+        self._updater = None          # set later via set_updater()
+        self._pending_update = None   # latest UpdateCheckResult
+
         # Scan status indicator — permanent widget on the far right.
         self._scan_label = QLabel("")
         self._scan_label.setStyleSheet("color:#069; font-weight:bold;")
@@ -287,6 +307,10 @@ class MainWindow(QMainWindow):
         b.session_connected.connect(self._on_scan_paused)
         b.session_disconnected.connect(self._on_scan_resumed)
         b.vara_disconnected.connect(self._on_scan_idle)
+
+        # Software updates
+        b.update_available.connect(self._on_update_available)
+        b.update_failed.connect(lambda msg: log.debug("Update check: %s", msg))
 
     def _on_tab_changed(self, index: int):
         """Outer tab switched — refresh Messages if the Messages group is now active."""
@@ -396,6 +420,12 @@ class MainWindow(QMainWindow):
                             (e.data or {}).get("freq_khz", 0.0),
                             (e.data or {}).get("channel_index", 0),
                             (e.data or {}).get("total_channels", 0)))
+
+        # Software update events
+        bus.subscribe(EventType.UPDATE_AVAILABLE,
+            lambda e: _emit(b.update_available, e.data))
+        bus.subscribe(EventType.UPDATE_FAILED,
+            lambda e: _emit(b.update_failed, str(e.data or "")))
 
     # ── Slot handlers ─────────────────────────────────────────────────────
 
@@ -649,6 +679,31 @@ class MainWindow(QMainWindow):
         elif w >= 1000 and not self._dashboard_horizontal:
             self._dashboard.setOrientation(Qt.Orientation.Horizontal)
             self._dashboard_horizontal = True
+
+    # ── Software update ────────────────────────────────────────────────────
+
+    def set_updater(self, updater, restart_callback=None):
+        """Called by BBSApplication after construction."""
+        self._updater = updater
+        self._restart_callback = restart_callback
+
+    def _on_update_available(self, check_result):
+        self._pending_update = check_result
+        n = len(check_result.commits)
+        self._update_label.setText(f"UPDATE ({n})")
+        self._update_label.show()
+
+    def _show_update_dialog(self):
+        if not self._updater or not self._pending_update:
+            return
+        from gui.update_dialog import UpdateDialog
+        dlg = UpdateDialog(
+            self._pending_update,
+            self._updater,
+            self._restart_callback or (lambda: None),
+            parent=self,
+        )
+        dlg.exec()
 
     # ── Close handling ────────────────────────────────────────────────────
 

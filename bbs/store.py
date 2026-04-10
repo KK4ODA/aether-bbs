@@ -229,7 +229,7 @@ class MessageStore:
             ).isoformat()
 
         with self._lock:
-            self._conn.execute(
+            cur = self._conn.execute(
                 """INSERT OR IGNORE INTO messages
                    (id,from_call,to_call,subject,body,date,area,instance,
                     via_path,expires_at,created_at,priority)
@@ -237,15 +237,19 @@ class MessageStore:
                 (mid, from_call.upper(), to_call.upper(), subject,
                  body, now, area.upper(), instance, via_path, expires, now, priority),
             )
+            inserted = cur.rowcount > 0
             self._conn.commit()
 
-        if self._bus:
+        if inserted and self._bus:
             self._bus.emit(
                 EventType.MESSAGE_RECEIVED,
                 data={"mid": mid, "from": from_call, "to": to_call,
                       "subject": subject, "priority": priority},
             )
-        log.info(f"Message saved: MID={mid} from={from_call} to={to_call} priority={priority}")
+        if inserted:
+            log.info(f"Message saved: MID={mid} from={from_call} to={to_call} priority={priority}")
+        else:
+            log.debug(f"Message already exists, skipped: MID={mid}")
         return mid
 
     def get_message(self, mid: str) -> Optional[dict]:

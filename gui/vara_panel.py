@@ -122,6 +122,11 @@ class InstanceCard(QGroupBox):
         self._btn_restart = QPushButton("Restart")
         self._btn_abort   = QPushButton("ABORT")
         self._btn_abort.setStyleSheet("color:red;font-weight:bold;")
+        self._btn_abort.setToolTip(
+            "Forcefully kill the VARA process for this instance.\n"
+            "Use only if VARA is unresponsive — a normal Stop\n"
+            "is preferred for graceful shutdown."
+        )
 
         self._btn_start.clicked.connect(lambda: self._im.start_instance(self._name))
         self._btn_stop.clicked.connect(lambda: self._im.stop_instance(self._name))

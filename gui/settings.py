@@ -21,7 +21,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 
 from core.config import (AppConfig, ConfigManager, InstanceConfig, PTTConfig,
-                          RigControlConfig, ScanChannelConfig,
+                          RigControlConfig, ScanChannelConfig, SoundmodemConfig,
                           BulletinAreaConfig, ForwardingNeighbourConfig,
                           ForwardingConfig, TacticalAddress, WinlinkConfig,
                           NotificationConfig)
@@ -312,13 +312,14 @@ class SettingsTab(QScrollArea):
     settings_saved = pyqtSignal()
 
     def __init__(self, cm: ConfigManager, config: AppConfig, bus: EventBus,
-                 notifiers=None, parent=None):
+                 notifiers=None, delivery_engine=None, parent=None):
         super().__init__(parent)
         self._cm     = cm
         self._config = config
         self._bus    = bus
         self._dirty  = False
         self._notifiers = notifiers or {}
+        self._delivery_engine = delivery_engine
 
         container = QWidget()
         outer     = QVBoxLayout(container)
@@ -416,6 +417,8 @@ class SettingsTab(QScrollArea):
             ("Alerts",             self._alerts_tab,        False),
             ("Notifications",      self._notifications_tab, False),
             ("Logging",            self._logging_tab,       False),
+            "ABOUT",
+            ("About & Updates",    self._updater_tab,       False),
         ]
 
         page_index = 0
@@ -516,10 +519,23 @@ class SettingsTab(QScrollArea):
         cfg = self._config.station
 
         self._bbs_call  = QLineEdit(cfg.bbs_callsign)
+        self._bbs_call.setToolTip(
+            "The callsign this BBS identifies as (e.g. KK4ODA-5).\n"
+            "Remote stations connect to this callsign over RF."
+        )
         self._sysop_call= QLineEdit(cfg.sysop_callsign)
+        self._sysop_call.setToolTip(
+            "Your personal callsign as the system operator.\n"
+            "Shown in the BBS INFO command and APRS beacons."
+        )
         self._grid      = QLineEdit(cfg.grid_square)
+        self._grid.setToolTip(
+            "Maidenhead grid square (e.g. EM73).\n"
+            "Used for APRS position beacons and BBS INFO."
+        )
 
         self._latitude  = QDoubleSpinBox()
+        self._latitude.setToolTip("Station latitude in decimal degrees.\nPositive = North, Negative = South.")
         self._latitude.setRange(-90.0, 90.0)
         self._latitude.setDecimals(6)
         self._latitude.setSingleStep(0.001)
@@ -528,6 +544,7 @@ class SettingsTab(QScrollArea):
         self._latitude.setSpecialValueText("")
 
         self._longitude = QDoubleSpinBox()
+        self._longitude.setToolTip("Station longitude in decimal degrees.\nPositive = East, Negative = West.")
         self._longitude.setRange(-180.0, 180.0)
         self._longitude.setDecimals(6)
         self._longitude.setSingleStep(0.001)
@@ -535,10 +552,18 @@ class SettingsTab(QScrollArea):
         self._longitude.setValue(cfg.longitude if cfg.longitude is not None else 0.0)
 
         self._beacon_iv = QSpinBox()
+        self._beacon_iv.setToolTip(
+            "Minutes between APRS position beacons.\n"
+            "Set to 0 to disable automatic beaconing."
+        )
         self._beacon_iv.setRange(0, 120)
         self._beacon_iv.setValue(cfg.beacon_interval)
         self._beacon_iv.setSuffix(" min (0=off)")
         self._beacon_txt= QLineEdit(cfg.beacon_text)
+        self._beacon_txt.setToolTip(
+            "Custom text appended to APRS beacon packets.\n"
+            "e.g. 'VARA BBS 145.530 MHz'"
+        )
 
         form.addRow("BBS Callsign:",    self._bbs_call)
         form.addRow("Sysop Callsign:",  self._sysop_call)
@@ -563,6 +588,11 @@ class SettingsTab(QScrollArea):
         tac_layout.addWidget(tac_note)
 
         self._tactical_table = QTableWidget(0, 3)
+        self._tactical_table.setToolTip(
+            "Callsigns that trigger priority alerts when a message\n"
+            "is addressed to them (e.g. EMCOMM, SHELTER, WEATHER).\n"
+            "Advertise = include in APRS beacon for discovery."
+        )
         self._tactical_table.setHorizontalHeaderLabels(["Callsign (max 8)", "Alert Phrase (spoken by TTS)", "Advertise"])
         self._tactical_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._tactical_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -623,7 +653,8 @@ class SettingsTab(QScrollArea):
         for cfg in self._config.instances:
             self._inst_data.append({
                 "name":             cfg.name,
-                "mode":             getattr(cfg, "mode", "FM").upper(),
+                "transport":        getattr(cfg, "transport", "VARA_FM"),
+                "mode":             "",  # legacy, cleared
                 "frequency_label":  cfg.frequency_label,
                 "executable_path":  cfg.executable_path,
                 "cmd_port":         cfg.cmd_port,
@@ -633,6 +664,7 @@ class SettingsTab(QScrollArea):
                                     or (500 if getattr(cfg, "is_hf", False) else 2300),
                 "ptt":              getattr(cfg, "ptt", PTTConfig()),
                 "rig_control":      getattr(cfg, "rig_control", RigControlConfig()),
+                "soundmodem":       getattr(cfg, "soundmodem", SoundmodemConfig()),
                 "auto_start":       cfg.auto_start,
                 "enabled":          cfg.enabled,
             })
@@ -704,13 +736,20 @@ class SettingsTab(QScrollArea):
         )
 
         self._inst_name = QLineEdit()
+        self._inst_name.setToolTip("Friendly name for this instance (e.g. Primary, HF-40m).")
         self._inst_name.textChanged.connect(self._on_inst_field_changed)
         id_form.addRow("Name:", self._inst_name)
 
         self._inst_mode = QComboBox()
-        self._inst_mode.addItems(["FM", "HF"])
+        self._inst_mode.addItems(["VARA_FM", "VARA_HF", "SOUNDMODEM", "AETHER_HF"])
+        self._inst_mode.setToolTip(
+            "VARA_FM — VHF/UHF via VARA FM modem\n"
+            "VARA_HF — HF via VARA HF modem (needs PTT control)\n"
+            "SOUNDMODEM — AX.25 packet via Soundmodem/Direwolf (AGWPE)\n"
+            "AETHER_HF — HF via AETHER modem (experimental)"
+        )
         self._inst_mode.currentTextChanged.connect(self._on_inst_mode_changed)
-        id_form.addRow("Mode:", self._inst_mode)
+        id_form.addRow("Transport:", self._inst_mode)
 
         self._inst_freq = QLineEdit()
         self._inst_freq.setPlaceholderText("e.g. 145.050 or 14.105")
@@ -722,7 +761,9 @@ class SettingsTab(QScrollArea):
         chk_row = QHBoxLayout(chk_row_widget)
         chk_row.setContentsMargins(0, 0, 0, 0)
         self._inst_enabled = QCheckBox("Enabled")
+        self._inst_enabled.setToolTip("Enable or disable this instance.\nDisabled instances are not started.")
         self._inst_auto_start = QCheckBox("Auto Start")
+        self._inst_auto_start.setToolTip("Automatically launch the modem executable\nwhen the BBS starts.")
         self._inst_enabled.stateChanged.connect(self._on_inst_field_changed)
         self._inst_auto_start.stateChanged.connect(self._on_inst_field_changed)
         chk_row.addWidget(self._inst_enabled)
@@ -733,7 +774,8 @@ class SettingsTab(QScrollArea):
         dl.addWidget(id_group)
 
         # ── VARA Modem group ──────────────────────────────────────
-        vara_group = QGroupBox("VARA Modem")
+        self._inst_vara_group = QGroupBox("VARA Modem")
+        vara_group = self._inst_vara_group
         vara_form = QFormLayout(vara_group)
         vara_form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
@@ -743,6 +785,7 @@ class SettingsTab(QScrollArea):
         exe_lay = QHBoxLayout(exe_widget)
         exe_lay.setContentsMargins(0, 0, 0, 0)
         self._inst_exe = QLineEdit()
+        self._inst_exe.setToolTip("Full path to the VARA modem executable\n(e.g. C:\\VARA FM\\VARAFM.exe).")
         self._inst_exe.textChanged.connect(self._on_inst_field_changed)
         browse_btn = QPushButton("Browse…")
         browse_btn.setFixedWidth(70)
@@ -753,11 +796,13 @@ class SettingsTab(QScrollArea):
 
         self._inst_cmd_port = QSpinBox()
         self._inst_cmd_port.setRange(1024, 65535)
+        self._inst_cmd_port.setToolTip("TCP port for VARA command/control channel.\nDefault: 8300. Must differ from Data port.")
         self._inst_cmd_port.valueChanged.connect(self._on_inst_field_changed)
         vara_form.addRow("CMD port:", self._inst_cmd_port)
 
         self._inst_data_port = QSpinBox()
         self._inst_data_port.setRange(1024, 65535)
+        self._inst_data_port.setToolTip("TCP port for VARA data channel (RF payload).\nDefault: 8301. Must differ from CMD port.")
         self._inst_data_port.valueChanged.connect(self._on_inst_field_changed)
         vara_form.addRow("Data port:", self._inst_data_port)
 
@@ -774,6 +819,32 @@ class SettingsTab(QScrollArea):
         vara_form.addRow("Bandwidth (Hz):", self._inst_bw)
 
         dl.addWidget(vara_group)
+
+        # ── Soundmodem (AGWPE) group ─────────────────────────────
+        self._inst_soundmodem_group = QGroupBox("Soundmodem (AGWPE)")
+        sm_form = QFormLayout(self._inst_soundmodem_group)
+
+        self._inst_sm_host = QLineEdit()
+        self._inst_sm_host.setPlaceholderText("127.0.0.1")
+        self._inst_sm_host.setToolTip("IP address of the Soundmodem/Direwolf host.\nUsually 127.0.0.1 for local.")
+        self._inst_sm_host.textChanged.connect(self._on_inst_field_changed)
+        sm_form.addRow("Host:", self._inst_sm_host)
+
+        self._inst_sm_port = QSpinBox()
+        self._inst_sm_port.setRange(1, 65535)
+        self._inst_sm_port.setValue(8000)
+        self._inst_sm_port.setToolTip("TCP port for the AGWPE interface.\nSoundmodem default: 8000, Direwolf default: 8000.")
+        self._inst_sm_port.valueChanged.connect(self._on_inst_field_changed)
+        sm_form.addRow("AGWPE Port:", self._inst_sm_port)
+
+        self._inst_sm_protocol = QComboBox()
+        self._inst_sm_protocol.addItems(["AGWPE", "KISS"])
+        self._inst_sm_protocol.setToolTip("AGWPE — binary frame protocol (most common)\nKISS — serial TNC protocol (planned)")
+        self._inst_sm_protocol.currentTextChanged.connect(self._on_inst_field_changed)
+        sm_form.addRow("Protocol:", self._inst_sm_protocol)
+
+        self._inst_soundmodem_group.setVisible(False)
+        dl.addWidget(self._inst_soundmodem_group)
 
         # ── PTT Control group ─────────────────────────────────────
         self._inst_ptt_group = QGroupBox("PTT Control  (HF only)")
@@ -867,13 +938,20 @@ class SettingsTab(QScrollArea):
 
     @staticmethod
     def _inst_list_label(d: dict) -> str:
-        mode = d.get("mode", "FM")
+        transport = d.get("transport", "")
+        if not transport and d.get("mode"):
+            transport = f"VARA_{d['mode'].upper()}"
+        transport = transport or "VARA_FM"
+        # Short display label
+        short = {"VARA_FM": "FM", "VARA_HF": "HF",
+                 "SOUNDMODEM": "AGWPE", "AETHER_HF": "AETHER"}.get(
+                     transport, transport)
         name = d.get("name", "Instance")
         freq = d.get("frequency_label", "")
         parts = [name]
         if freq:
             parts.append(freq)
-        return f"{' · '.join(parts)}  [{mode}]"
+        return f"{' · '.join(parts)}  [{short}]"
 
     # ── Selection change: save old → load new ─────────────────────────────
 
@@ -889,7 +967,8 @@ class SettingsTab(QScrollArea):
             return
         d = self._inst_data[idx]
         d["name"]             = self._inst_name.text()
-        d["mode"]             = self._inst_mode.currentText().upper()
+        d["transport"]        = self._inst_mode.currentText().upper()
+        d["mode"]             = ""  # legacy field, cleared
         d["frequency_label"]  = self._inst_freq.text()
         d["executable_path"]  = self._inst_exe.text()
         d["cmd_port"]         = self._inst_cmd_port.value()
@@ -898,6 +977,13 @@ class SettingsTab(QScrollArea):
         d["bandwidth"]        = int(self._inst_bw.currentText())
         d["auto_start"]       = self._inst_auto_start.isChecked()
         d["enabled"]          = self._inst_enabled.isChecked()
+        # Soundmodem settings
+        sm = d.get("soundmodem", SoundmodemConfig())
+        d["soundmodem"] = sm.model_copy(update={
+            "host": self._inst_sm_host.text() or "127.0.0.1",
+            "port": self._inst_sm_port.value(),
+            "protocol": self._inst_sm_protocol.currentText(),
+        })
         # PTT method from combo; rest of PTTConfig preserved from dialog
         ptt = d["ptt"]
         d["ptt"] = ptt.model_copy(
@@ -918,7 +1004,11 @@ class SettingsTab(QScrollArea):
         d = self._inst_data[idx]
 
         self._inst_name.setText(d["name"])
-        self._inst_mode.setCurrentText(d["mode"])
+        # Show transport (or derive from legacy mode field)
+        transport = d.get("transport", "")
+        if not transport and d.get("mode"):
+            transport = f"VARA_{d['mode'].upper()}"
+        self._inst_mode.setCurrentText(transport or "VARA_FM")
         self._inst_freq.setText(d.get("frequency_label", ""))
         self._inst_exe.setText(d.get("executable_path", ""))
         self._inst_cmd_port.setValue(d.get("cmd_port", 8300))
@@ -935,6 +1025,14 @@ class SettingsTab(QScrollArea):
         method = (ptt_cfg.method or "VOX").upper()
         if method in ("VOX", "RTS", "DTR", "DTRRTS", "HAMLIB", "CM108", "OMNIRIG", "FLRIG"):
             self._inst_ptt_method.setCurrentText(method)
+
+        # Soundmodem settings
+        sm = d.get("soundmodem", SoundmodemConfig())
+        self._inst_sm_host.setText(getattr(sm, "host", "127.0.0.1"))
+        self._inst_sm_port.setValue(getattr(sm, "port", 8000))
+        proto = getattr(sm, "protocol", "AGWPE")
+        if proto in ("AGWPE", "KISS"):
+            self._inst_sm_protocol.setCurrentText(proto)
 
         self._inst_auto_start.setChecked(d.get("auto_start", False))
         self._inst_enabled.setChecked(d.get("enabled", True))
@@ -976,10 +1074,14 @@ class SettingsTab(QScrollArea):
             self._update_inst_ptt_state()
 
     def _update_inst_ptt_state(self):
-        """Enable/disable PTT and Rig Control groups based on mode."""
-        is_hf = self._inst_mode.currentText().upper() == "HF"
-        self._inst_ptt_group.setEnabled(is_hf)
-        self._inst_rig_group.setEnabled(is_hf)
+        """Show/hide groups based on transport type."""
+        transport = self._inst_mode.currentText().upper()
+        is_hf = transport in ("VARA_HF", "AETHER_HF")
+        is_soundmodem = transport == "SOUNDMODEM"
+        self._inst_ptt_group.setVisible(is_hf)
+        self._inst_rig_group.setVisible(is_hf)
+        self._inst_vara_group.setVisible(not is_soundmodem)
+        self._inst_soundmodem_group.setVisible(is_soundmodem)
         if not is_hf:
             self._inst_ptt_method.setCurrentText("VOX")
 
@@ -1027,7 +1129,8 @@ class SettingsTab(QScrollArea):
         base_port = 8300 + len(self._inst_data) * 10
         d = {
             "name":             f"Instance {len(self._inst_data) + 1}",
-            "mode":             "FM",
+            "transport":        "VARA_FM",
+            "mode":             "",
             "frequency_label":  "",
             "executable_path":  "",
             "cmd_port":         base_port,
@@ -1036,6 +1139,7 @@ class SettingsTab(QScrollArea):
             "bandwidth":        2300,
             "ptt":              PTTConfig(),
             "rig_control":      RigControlConfig(),
+            "soundmodem":       SoundmodemConfig(),
             "auto_start":       False,
             "enabled":          True,
         }
@@ -1211,6 +1315,10 @@ class SettingsTab(QScrollArea):
         cfg  = self._config.bbs
 
         self._welcome = QLineEdit(cfg.welcome_message)
+        self._welcome.setToolTip(
+            "Text shown to stations when they connect to the BBS.\n"
+            "Keep it short — sent over RF on every session."
+        )
         self._timeout = QSpinBox()
         self._timeout.setRange(30, 3600)
         self._timeout.setValue(cfg.session_timeout)
@@ -1224,6 +1332,10 @@ class SettingsTab(QScrollArea):
         self._msg_age.setRange(1, 365)
         self._msg_age.setValue(cfg.max_message_age)
         self._msg_age.setSuffix(" days")
+        self._msg_age.setToolTip(
+            "Messages older than this are automatically purged.\n"
+            "Keeps the mailbox manageable on limited storage."
+        )
         self._max_sess = QSpinBox()
         self._max_sess.setRange(1, 16)
         self._max_sess.setValue(cfg.max_sessions)
@@ -1277,6 +1389,10 @@ class SettingsTab(QScrollArea):
         layout.addWidget(note)
 
         self._bull_table = QTableWidget(0, 4)
+        self._bull_table.setToolTip(
+            "Bulletin areas this BBS accepts. Common groups: ALL, WX, EMCOMM.\n"
+            "Each area can have its own max age and can be enabled/disabled."
+        )
         self._bull_table.setHorizontalHeaderLabels(
             ["Area Name", "Description", "Max Age (days)", "Enabled"]
         )
@@ -1347,9 +1463,17 @@ class SettingsTab(QScrollArea):
         srv_form = QFormLayout(srv_box)
         self._fwd_srv_en = QCheckBox("Accept inbound forwarding connections")
         self._fwd_srv_en.setChecked(self._config.bbs.forwarding.server_enabled)
+        self._fwd_srv_en.setToolTip(
+            "Allow neighbour BBSs to connect and exchange bulletins.\n"
+            "Disable if this BBS operates standalone."
+        )
         self._fwd_srv_port = QSpinBox()
         self._fwd_srv_port.setRange(1024, 65535)
         self._fwd_srv_port.setValue(self._config.bbs.forwarding.server_port)
+        self._fwd_srv_port.setToolTip(
+            "TCP port for inbound forwarding connections from neighbour BBSs.\n"
+            "Port-forward through your router if neighbours connect via internet."
+        )
         srv_form.addRow("", self._fwd_srv_en)
         srv_form.addRow("Listen Port:", self._fwd_srv_port)
         self._fwd_srv_bind = QLineEdit(
@@ -1382,6 +1506,10 @@ class SettingsTab(QScrollArea):
         nbr_layout.addWidget(nbr_note)
 
         self._fwd_table = QTableWidget(0, 6)
+        self._fwd_table.setToolTip(
+            "Neighbour BBSs to exchange bulletins with on a schedule.\n"
+            "Areas: comma-separated list of bulletin areas to forward (blank = all)."
+        )
         self._fwd_table.setHorizontalHeaderLabels(
             ["BBS Callsign", "Host", "Port", "Interval (min)", "Areas", "Enabled"]
         )
@@ -1472,6 +1600,10 @@ class SettingsTab(QScrollArea):
 
         self._ntfy_en = QCheckBox("Enable ntfy notifications")
         self._ntfy_en.setChecked(cfg.enabled)
+        self._ntfy_en.setToolTip(
+            "Enable push notifications via ntfy (self-hosted or cloud).\n"
+            "Requires a running ntfy server or ntfy.sh cloud account."
+        )
         ntfy_form.addRow("", self._ntfy_en)
 
         self._ntfy_url = QLineEdit(cfg.ntfy_url)
@@ -1486,6 +1618,10 @@ class SettingsTab(QScrollArea):
 
         self._ntfy_priority = QComboBox()
         self._ntfy_priority.addItems(["min", "low", "default", "high", "urgent"])
+        self._ntfy_priority.setToolTip(
+            "Notification priority level sent to ntfy.\n"
+            "'urgent' overrides Do Not Disturb on most devices."
+        )
         idx = self._ntfy_priority.findText(cfg.priority)
         if idx >= 0:
             self._ntfy_priority.setCurrentIndex(idx)
@@ -1493,6 +1629,10 @@ class SettingsTab(QScrollArea):
 
         self._ntfy_cloud = QCheckBox("Also relay to cloud (ntfy.sh) for iOS push")
         self._ntfy_cloud.setChecked(cfg.cloud_relay)
+        self._ntfy_cloud.setToolTip(
+            "Posts notifications to both local and ntfy.sh cloud servers.\n"
+            "Required for iOS push — the ntfy iOS app needs the cloud relay."
+        )
         ntfy_form.addRow("", self._ntfy_cloud)
 
         self._ntfy_cloud_url = QLineEdit(cfg.cloud_url)
@@ -1523,6 +1663,10 @@ class SettingsTab(QScrollArea):
 
         self._push_en = QCheckBox("Enable Pushover notifications")
         self._push_en.setChecked(cfg.pushover_enabled)
+        self._push_en.setToolTip(
+            "Enable push notifications via Pushover (iOS/Android).\n"
+            "Requires a Pushover account and API token from pushover.net."
+        )
         push_form.addRow("", self._push_en)
 
         self._push_token = QLineEdit(cfg.pushover_api_token)
@@ -1536,6 +1680,10 @@ class SettingsTab(QScrollArea):
         self._push_user = QLineEdit(cfg.pushover_user_key)
         self._push_user.setPlaceholderText("User key from pushover.net")
         self._push_user.setEchoMode(QLineEdit.EchoMode.Password)
+        self._push_user.setToolTip(
+            "Your personal Pushover user key (not the API token).\n"
+            "Found on your Pushover dashboard after login."
+        )
         push_form.addRow("User Key:", self._push_user)
 
         self._push_priority = QSpinBox()
@@ -1574,6 +1722,10 @@ class SettingsTab(QScrollArea):
 
         self._sms_en = QCheckBox("Enable SMS notifications")
         self._sms_en.setChecked(cfg.sms_enabled)
+        self._sms_en.setToolTip(
+            "Send SMS alerts via a USB GSM modem.\n"
+            "Works off-grid — no internet required."
+        )
         sms_form.addRow("", self._sms_en)
 
         self._sms_port = QLineEdit(cfg.sms_serial_port)
@@ -1588,6 +1740,10 @@ class SettingsTab(QScrollArea):
         self._sms_baud.setRange(300, 115200)
         self._sms_baud.setValue(cfg.sms_baud_rate)
         self._sms_baud.setSuffix(" baud")
+        self._sms_baud.setToolTip(
+            "Serial baud rate for the GSM modem.\n"
+            "Most USB modems default to 9600 or 115200."
+        )
         sms_form.addRow("Baud Rate:", self._sms_baud)
 
         self._sms_numbers = QLineEdit(
@@ -1811,8 +1967,16 @@ class SettingsTab(QScrollArea):
         audio_box = QGroupBox("Audio Alerts")
         audio_form = QFormLayout(audio_box)
 
-        self._alert_audio_en = QCheckBox("Enable audio alerts")
-        self._alert_audio_en.setChecked(cfg.audio_enabled)
+        self._alert_audio_en = QCheckBox(
+            "Enable audio alerts (TTS announcements and session tones)"
+        )
+        self._alert_audio_en.setChecked(cfg.audio_enabled and not cfg.visual_only)
+        self._alert_audio_en.setToolTip(
+            "Master switch for all audio: TTS priority announcements\n"
+            "and session connect/disconnect tones.\n"
+            "Uncheck for visual-only alerts (on-screen banners, no sound)."
+        )
+        self._alert_audio_en.toggled.connect(self._on_audio_toggled)
         audio_form.addRow("", self._alert_audio_en)
 
         self._session_sounds = QCheckBox("Play tone on RF session connect / disconnect")
@@ -1823,9 +1987,10 @@ class SettingsTab(QScrollArea):
         )
         audio_form.addRow("", self._session_sounds)
 
-        self._alert_visual_only = QCheckBox("Visual only (suppress audio)")
+        # visual_only is now derived from the audio toggle — hidden from UI
+        self._alert_visual_only = QCheckBox()
         self._alert_visual_only.setChecked(cfg.visual_only)
-        audio_form.addRow("", self._alert_visual_only)
+        self._alert_visual_only.setVisible(False)
 
         self._alert_interval = QSpinBox()
         self._alert_interval.setRange(1, 300)
@@ -1862,10 +2027,18 @@ class SettingsTab(QScrollArea):
 
         self._alert_high_contrast = QCheckBox("High-contrast alert (red/white)")
         self._alert_high_contrast.setChecked(cfg.high_contrast)
+        self._alert_high_contrast.setToolTip(
+            "Use maximum-saturation red/white for alert banners.\n"
+            "Improves visibility in bright sunlight or field conditions."
+        )
         vis_form.addRow("", self._alert_high_contrast)
 
         self._alert_large_font = QCheckBox("Large font in alert windows (14pt+)")
         self._alert_large_font.setChecked(cfg.large_font)
+        self._alert_large_font.setToolTip(
+            "Use 14pt+ font in alert pop-ups for readability.\n"
+            "Helpful for operators with impaired vision."
+        )
         vis_form.addRow("", self._alert_large_font)
 
         vis_note = QLabel(
@@ -1880,6 +2053,11 @@ class SettingsTab(QScrollArea):
 
         layout.addStretch()
         return w
+
+    def _on_audio_toggled(self, checked: bool):
+        """Sync visual_only and session sounds with the audio master switch."""
+        self._alert_visual_only.setChecked(not checked)
+        self._session_sounds.setEnabled(checked)
 
     def _test_alert_audio(self):
         """One-shot TTS test using a detached subprocess.
@@ -2404,21 +2582,41 @@ class SettingsTab(QScrollArea):
 
         self._wl_enabled = QCheckBox("Enable Winlink Integration (via Pat)")
         self._wl_enabled.setChecked(cfg.enabled)
+        self._wl_enabled.setToolTip(
+            "Enable Winlink CMS integration using the Pat client.\n"
+            "Allows BBS users to send/receive Winlink messages."
+        )
 
         self._wl_callsign = QLineEdit(cfg.gateway_callsign)
         self._wl_callsign.setPlaceholderText("e.g. KK4ODA-5")
+        self._wl_callsign.setToolTip(
+            "Your Winlink gateway callsign (with SSID if applicable).\n"
+            "This is the callsign registered with the Winlink CMS."
+        )
 
         self._wl_password = QLineEdit(
             cfg.decrypt_gateway_password(self._config.security.machine_secret))
         self._wl_password.setEchoMode(QLineEdit.EchoMode.Password)
         self._wl_password.setPlaceholderText("Winlink secure login password")
+        self._wl_password.setToolTip(
+            "Your Winlink account password for CMS authentication.\n"
+            "Stored encrypted in the config file."
+        )
 
         self._wl_grid = QLineEdit(cfg.grid_square)
         self._wl_grid.setPlaceholderText("e.g. EM73vk")
+        self._wl_grid.setToolTip(
+            "Maidenhead grid square for your station location.\n"
+            "Used by Pat for CMS gateway selection (e.g. EM73vk)."
+        )
 
         # Pat executable path with browse button
         self._wl_pat_exe = QLineEdit(cfg.pat_exe_path)
         self._wl_pat_exe.setPlaceholderText("Path to pat.exe")
+        self._wl_pat_exe.setToolTip(
+            "Full path to the Pat executable (getpat.io).\n"
+            "Leave blank to auto-detect from PATH."
+        )
         pat_browse = QPushButton("Browse...")
         pat_browse.clicked.connect(self._browse_pat_exe)
         pat_exe_row = QHBoxLayout()
@@ -2427,17 +2625,33 @@ class SettingsTab(QScrollArea):
 
         self._wl_pat_addr = QLineEdit(cfg.pat_http_addr)
         self._wl_pat_addr.setPlaceholderText("localhost:8080")
+        self._wl_pat_addr.setToolTip(
+            "Address of Pat's HTTP API (host:port).\n"
+            "Default: localhost:8080. Change if Pat uses a different port."
+        )
 
         self._wl_auto_launch = QCheckBox("Auto-launch Pat when BBS starts")
         self._wl_auto_launch.setChecked(cfg.auto_launch_pat)
+        self._wl_auto_launch.setToolTip(
+            "Automatically start Pat as a subprocess when the BBS launches.\n"
+            "Uncheck if you run Pat separately or as a system service."
+        )
 
         self._wl_fwd_calls = QLineEdit(", ".join(cfg.forward_calls))
         self._wl_fwd_calls.setPlaceholderText("Comma-separated extra callsigns")
+        self._wl_fwd_calls.setToolTip(
+            "Additional callsigns to check for Winlink mail besides\n"
+            "the gateway callsign. Useful for tactical addresses."
+        )
 
         self._wl_cms_timeout = QSpinBox()
         self._wl_cms_timeout.setRange(30, 600)
         self._wl_cms_timeout.setValue(cfg.cms_timeout)
         self._wl_cms_timeout.setSuffix(" seconds")
+        self._wl_cms_timeout.setToolTip(
+            "Timeout for CMS poll operations via Pat.\n"
+            "Increase if you have a slow internet connection."
+        )
 
         # Pat status label
         self._wl_pat_status = QLabel("")
@@ -2559,7 +2773,11 @@ class SettingsTab(QScrollArea):
     def _delivery_tab(self) -> QWidget:
         from gui.delivery_tabs import OutboundDeliveryTab
         self._od_tab = OutboundDeliveryTab(self._config)
-        return self._od_tab.build()
+        w = self._od_tab.build()
+        if self._delivery_engine:
+            self._od_tab.set_delivery_engine(self._delivery_engine)
+            self._od_tab.start_health_timer()
+        return w
 
     def _smtp_providers_tab(self) -> QWidget:
         from gui.delivery_tabs import SMTPProvidersTab
@@ -2585,14 +2803,34 @@ class SettingsTab(QScrollArea):
 
         self._aprs_en  = QCheckBox("Enable APRS-IS Gateway")
         self._aprs_en.setChecked(cfg.enabled)
+        self._aprs_en.setToolTip(
+            "Connect to APRS-IS to beacon BBS status and receive APRS messages.\n"
+            "Requires internet access to reach the APRS-IS network."
+        )
         self._is_srv   = QLineEdit(cfg.is_server)
+        self._is_srv.setToolTip(
+            "APRS-IS server hostname (e.g. rotate.aprs2.net).\n"
+            "Use a regional server for lower latency."
+        )
         self._is_port  = QSpinBox()
         self._is_port.setRange(1, 65535)
         self._is_port.setValue(cfg.is_port)
+        self._is_port.setToolTip(
+            "APRS-IS server port. Standard: 14580 (filtered feed).\n"
+            "Use 14580 unless your server requires a different port."
+        )
         self._is_pc    = QSpinBox()
         self._is_pc.setRange(-1, 99999)
         self._is_pc.setValue(cfg.is_passcode)
+        self._is_pc.setToolTip(
+            "APRS-IS passcode for your callsign (required for TX).\n"
+            "Generate at aprs-is.net or similar tools. -1 = receive only."
+        )
         self._is_filter= QLineEdit(cfg.is_filter)
+        self._is_filter.setToolTip(
+            "APRS-IS server-side filter string (e.g. r/35.0/-85.0/100).\n"
+            "Limits received packets to a geographic area or type."
+        )
 
         form.addRow("", self._aprs_en)
         form.addRow("IS Server:",   self._is_srv)
@@ -2611,9 +2849,21 @@ class SettingsTab(QScrollArea):
         self._log_level = QComboBox()
         self._log_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         self._log_level.setCurrentText(cfg.level)
+        self._log_level.setToolTip(
+            "Minimum severity written to the log file.\n"
+            "INFO is recommended. Use DEBUG for troubleshooting."
+        )
         self._log_dir   = QLineEdit(cfg.log_dir)
+        self._log_dir.setToolTip(
+            "Directory where log files are written.\n"
+            "Relative paths are relative to the BBS working directory."
+        )
         self._pkt_log   = QCheckBox("Log decoded packet frames")
         self._pkt_log.setChecked(cfg.packet_log)
+        self._pkt_log.setToolTip(
+            "Write decoded packet data to a separate packet.log file.\n"
+            "Useful for diagnosing RF link issues. Disable in normal operation."
+        )
 
         self._vara_cmd_log = QCheckBox("Log raw VARA FM command port traffic")
         self._vara_cmd_log.setChecked(cfg.vara_cmd_log)
@@ -2721,6 +2971,102 @@ class SettingsTab(QScrollArea):
 
     # ── Save / Revert ─────────────────────────────────────────────────────
 
+    # ── About & Updates ───────────���────────────────────────────────────────
+
+    def _updater_tab(self) -> QWidget:
+        from core.version import get_version_display
+        w = QWidget()
+        form = QFormLayout(w)
+        cfg = self._config.updater
+
+        # Version display
+        ver_label = QLabel(f"<b>{get_version_display()}</b>")
+        ver_label.setStyleSheet("font-size: 13pt;")
+        form.addRow("Version:", ver_label)
+
+        form.addRow("", QLabel(""))  # spacer
+
+        # Check for updates button + status
+        btn_row = QWidget()
+        btn_lay = QHBoxLayout(btn_row)
+        btn_lay.setContentsMargins(0, 0, 0, 0)
+        self._upd_check_btn = QPushButton("Check for Updates")
+        self._upd_check_btn.setFixedWidth(180)
+        self._upd_check_btn.clicked.connect(self._on_check_updates)
+        btn_lay.addWidget(self._upd_check_btn)
+        self._upd_status = QLabel("")
+        self._upd_status.setStyleSheet("color:#b5bac1;")
+        btn_lay.addWidget(self._upd_status)
+        btn_lay.addStretch()
+        form.addRow("", btn_row)
+
+        form.addRow("", QLabel(""))  # spacer
+
+        # Config toggles
+        self._upd_check_startup = QCheckBox("Check for updates on startup")
+        self._upd_check_startup.setChecked(cfg.check_on_startup)
+        form.addRow("", self._upd_check_startup)
+
+        self._upd_include_aether = QCheckBox(
+            "Include AETHER HF modem in update checks"
+        )
+        self._upd_include_aether.setChecked(cfg.include_aether)
+        self._upd_include_aether.setToolTip(
+            "When enabled, the updater will also pull the latest\n"
+            "AETHER HF modem code from its git repository.\n"
+            "Leave off if AETHER is under active local development."
+        )
+        form.addRow("", self._upd_include_aether)
+
+        self._upd_interval = QSpinBox()
+        self._upd_interval.setRange(0, 168)
+        self._upd_interval.setValue(cfg.auto_check_interval_hours)
+        self._upd_interval.setSuffix(" hours")
+        self._upd_interval.setToolTip(
+            "Periodic background check interval (0 = startup only)"
+        )
+        form.addRow("Auto-check interval:", self._upd_interval)
+
+        return w
+
+    def _on_check_updates(self):
+        """Manual 'Check for Updates' button clicked."""
+        self._upd_check_btn.setEnabled(False)
+        self._upd_status.setText("Checking ...")
+        self._upd_status.setStyleSheet("color:#e2a84b;")
+
+        import threading
+        from core.updater import Updater
+        from pathlib import Path
+
+        def _check():
+            updater = Updater(
+                repo_dir=Path(__file__).resolve().parent.parent,
+                event_bus=self._bus,
+                config=self._config.updater,
+            )
+            result = updater.check_for_updates()
+            # Schedule GUI update on main thread via QTimer
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._on_check_result(result))
+
+        threading.Thread(target=_check, daemon=True, name="ManualUpdateCheck").start()
+
+    def _on_check_result(self, result):
+        self._upd_check_btn.setEnabled(True)
+        if result.error:
+            self._upd_status.setText(f"Error: {result.error}")
+            self._upd_status.setStyleSheet("color:#ed4245;")
+        elif result.update_available:
+            n = len(result.commits)
+            self._upd_status.setText(
+                f"{n} new commit(s) available!  Use the status bar indicator to update."
+            )
+            self._upd_status.setStyleSheet("color:#57f287;")
+        else:
+            self._upd_status.setText("Up to date.")
+            self._upd_status.setStyleSheet("color:#57f287;")
+
     def _save(self):
         if self._port_warning.text():
             QMessageBox.warning(self, "Port Conflict",
@@ -2752,7 +3098,8 @@ class SettingsTab(QScrollArea):
                                   PTTConfig, RigControlConfig,
                                   BulletinAreaConfig, ForwardingNeighbourConfig,
                                   ForwardingConfig, AlertConfig,
-                                  FileUploadConfig, WinlinkConfig, SecurityConfig)
+                                  FileUploadConfig, WinlinkConfig, SecurityConfig,
+                                  UpdaterConfig)
         from delivery.config import OutboundDeliveryConfig
 
         # ── Instances ─────────────────────────────────────────────────────
@@ -2769,7 +3116,7 @@ class SettingsTab(QScrollArea):
 
             instances.append(InstanceConfig(
                 name=d["name"],
-                mode=d["mode"],
+                transport=d.get("transport", "VARA_FM"),
                 frequency_label=freq_label,
                 executable_path=d.get("executable_path", ""),
                 cmd_port=d.get("cmd_port", 8300),
@@ -2778,6 +3125,7 @@ class SettingsTab(QScrollArea):
                 bandwidth=d.get("bandwidth", 2300),
                 ptt=d.get("ptt", PTTConfig()),
                 rig_control=d.get("rig_control", RigControlConfig()),
+                soundmodem=d.get("soundmodem", SoundmodemConfig()),
                 auto_start=d.get("auto_start", False),
                 enabled=d.get("enabled", True),
             ))
@@ -2977,6 +3325,12 @@ class SettingsTab(QScrollArea):
                 auto_block_threshold=self._sec_auto_block.value(),
                 machine_secret=self._config.security.machine_secret,
                 allow_plaintext_auth=self._sec_allow_plaintext.isChecked(),
+            ),
+            updater=UpdaterConfig(
+                check_on_startup=self._upd_check_startup.isChecked(),
+                include_aether=self._upd_include_aether.isChecked(),
+                auto_check_interval_hours=self._upd_interval.value(),
+                branch=self._config.updater.branch,
             ),
             instances=instances,
         )

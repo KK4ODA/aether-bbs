@@ -96,6 +96,13 @@ class EventType(Enum):
     # Application events
     CONFIG_CHANGED      = auto()
     SHUTDOWN            = auto()
+
+    # Software update events
+    UPDATE_CHECK_STARTED = auto()
+    UPDATE_AVAILABLE     = auto()   # data: UpdateCheckResult
+    UPDATE_STARTED       = auto()
+    UPDATE_COMPLETE      = auto()   # data: UpdateApplyResult
+    UPDATE_FAILED        = auto()   # data: error message string
     LOG_ENTRY           = auto()   # for GUI log viewer
     SIMULATOR_ACTIVE    = auto()   # simulator started for an instance
     SIMULATOR_INACTIVE  = auto()   # simulator stopped for an instance

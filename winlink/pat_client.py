@@ -561,6 +561,11 @@ class PatClient:
                     mid[:20], from_addr, to_addr, subject[:40],
                 )
 
+                # Skip if already in the store (avoids duplicate alerts on restart)
+                if self._store.get_message(mid):
+                    log.debug("Skipping already-stored message MID=%s", mid[:20])
+                    continue
+
                 # Store in BBS message store as an inbound Winlink message
                 try:
                     stored_mid = self._store.save_message(

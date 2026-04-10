@@ -67,6 +67,7 @@ class BBSApplication:
         self.rate_limiter      = None
         self.mode_policy       = None
         self.main_window       = None
+        self.updater           = None
         self._shutdown_done    = False
         self._shutdown_lock    = threading.Lock()
 
@@ -229,6 +230,7 @@ class BBSApplication:
                 "pushover": self.pushover_notifier,
                 "sms": self.sms_notifier,
             },
+            delivery_engine=self.delivery_engine,
         )
         self.main_window.show()
 
@@ -262,6 +264,24 @@ class BBSApplication:
             EventType.CONFIG_CHANGED,
             self._on_config_changed_security,
         )
+        # Restart instances whose rig_control or transport changed
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            self._on_config_changed_instances,
+        )
+
+        # --- Software updater ---
+        from core.updater import Updater
+        self.updater = Updater(
+            repo_dir=Path(__file__).resolve().parent,
+            event_bus=self.event_bus,
+            config=self.config.updater,
+        )
+        self.main_window.set_updater(self.updater, restart_callback=self.restart)
+        if self.config.updater.check_on_startup:
+            self.updater.check_once_async()
+        if self.config.updater.auto_check_interval_hours > 0:
+            self.updater.start_periodic_check()
 
         log.info("All subsystems started")
         return app.exec()
@@ -289,6 +309,12 @@ class BBSApplication:
         if cfg:
             self._apply_winlink_config(cfg)
 
+    def _on_config_changed_instances(self, event):
+        """Restart instances whose rig_control or transport settings changed."""
+        cfg = (event.data or {}).get("config")
+        if cfg and self.instance_manager:
+            self.instance_manager.update_config(cfg)
+
     def _on_config_changed_security(self, event):
         """Update mode policy and rate limiter when config changes."""
         cfg = (event.data or {}).get("config")
@@ -298,6 +324,15 @@ class BBSApplication:
             if self.rate_limiter and self.mode_policy:
                 self.rate_limiter.multiplier = self.mode_policy.rate_limit_multiplier
 
+    def restart(self):
+        """Graceful restart: shut down all subsystems, then re-launch."""
+        log.info("Restart requested — shutting down for update")
+        self._shutdown()
+        import subprocess as _sp
+        args = [sys.executable] + sys.argv
+        _sp.Popen(args)
+        QApplication.instance().quit()
+
     def _shutdown(self):
         with self._shutdown_lock:
             if self._shutdown_done:
@@ -305,6 +340,8 @@ class BBSApplication:
             self._shutdown_done = True
         log.info("Shutdown initiated")
         try:
+            if self.updater:
+                self.updater.stop()
             if self.dispatcher:
                 self.dispatcher.stop()
             if self.bulletin_forwarder:
@@ -337,7 +374,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("VARA BBS")
     app.setOrganizationName("Amateur Radio")
-    app.setApplicationVersion("1.0.0")
+    from core.version import get_version
+    app.setApplicationVersion(get_version())
 
     from gui.theme import apply_theme
     apply_theme(app)

@@ -102,6 +102,47 @@ class VARAFMInstanceManager:
         time.sleep(2)
         self.start_instance(name)
 
+    def update_config(self, new_config: AppConfig):
+        """Update config and restart instances whose settings changed."""
+        old_config = self._config
+        self._config = new_config
+
+        for inst_cfg in new_config.instances:
+            name = inst_cfg.name
+            status = self._instances.get(name)
+            if not status:
+                continue
+            old_cfg = status.cfg
+
+            # Check if rig_control (scan channels) changed
+            rig_changed = (
+                inst_cfg.rig_control != old_cfg.rig_control
+            )
+            # Check if transport/ports/exe changed
+            transport_changed = (
+                inst_cfg.transport != old_cfg.transport
+                or inst_cfg.cmd_port != old_cfg.cmd_port
+                or inst_cfg.data_port != old_cfg.data_port
+                or inst_cfg.executable_path != old_cfg.executable_path
+                or inst_cfg.soundmodem != old_cfg.soundmodem
+            )
+
+            # Update the stored config reference
+            status.cfg = inst_cfg
+
+            if rig_changed or transport_changed:
+                log.info(
+                    f"[{name}] Config changed "
+                    f"({'rig_control' if rig_changed else 'transport'}) "
+                    f"— restarting instance"
+                )
+                threading.Thread(
+                    target=self.restart_instance,
+                    args=(name,),
+                    daemon=True,
+                    name=f"InstRestart-{name}",
+                ).start()
+
     # ── Access ────────────────────────────────────────────────────────────
 
     def get_mux(self, name: str) -> Optional[VARAFMMux]:
