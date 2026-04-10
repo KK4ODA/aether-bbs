@@ -408,6 +408,20 @@ class BBSStatusPanel(QWidget):
         )
         action_row.addWidget(self._gen_pw_btn)
 
+        self._view_pw_btn = QPushButton("👁 View PW")
+        self._view_pw_btn.setFixedHeight(24)
+        self._view_pw_btn.setToolTip(
+            "View the stored password for the selected user.\n"
+            "Useful when a user forgets their password."
+        )
+        self._view_pw_btn.clicked.connect(self._view_password)
+        self._view_pw_btn.setStyleSheet(
+            "QPushButton { background:#6c5ce7; color:#fff; border:none; "
+            "border-radius:4px; padding:4px 10px; font-weight:600; }"
+            "QPushButton:hover { background:#5b4cc4; }"
+        )
+        action_row.addWidget(self._view_pw_btn)
+
         action_row.addStretch()
 
         self._approve_btn = QPushButton("✓ Approve")
@@ -1080,6 +1094,33 @@ class BBSStatusPanel(QWidget):
         else:
             log.info(f"GUI: manually added user {raw_call} as {role_str} (no pw) by sysop")
             self._force_refresh_user_table()
+
+    def _view_password(self):
+        """Show the stored password for the selected user."""
+        if not self._access:
+            return
+        row = self._user_table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self, "View Password", "Select a user in the table first.")
+            return
+        call_item = self._user_table.item(row, 0)
+        if not call_item:
+            return
+        callsign = call_item.text()
+
+        pw = self._access.get_decrypted_password(callsign)
+        if pw:
+            QMessageBox.information(
+                self, "Password",
+                f"Password for {callsign}:\n\n  {pw}\n\n"
+                "You can share this with the user via a secure channel\n"
+                "(e.g. Winlink, phone, in person). Never send over RF.")
+        else:
+            QMessageBox.information(
+                self, "Password",
+                f"No password set for {callsign}.\n\n"
+                "Use the 🔑 Password button to generate one.")
 
     def _provision_password(self):
         """Generate a password for the selected user and show a Winlink message."""
