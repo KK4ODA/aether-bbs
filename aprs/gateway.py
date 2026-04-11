@@ -300,9 +300,10 @@ class APRSGateway:
             for inst in self._config.instances:
                 if not inst.enabled:
                     continue
-                mode = getattr(inst, "mode", "FM").upper()
+                transport = getattr(inst, "transport", "VARA_FM").upper()
+                is_hf = transport in ("VARA_HF", "AETHER_HF")
 
-                if mode == "HF":
+                if is_hf:
                     bw = getattr(inst, "bandwidth", None) or 500
                     # Check for scan channels
                     rc = getattr(inst, "rig_control", None)
@@ -327,8 +328,9 @@ class APRSGateway:
                             f"{inst.frequency_label.strip()}HF/{bw}"
                         )
                 elif inst.frequency_label.strip():
+                    label = "FM" if transport == "VARA_FM" else "AGWPE"
                     freq_parts.append(
-                        f"{inst.frequency_label.strip()}{mode}"
+                        f"{inst.frequency_label.strip()}{label}"
                     )
         except Exception:
             pass  # never let a bad config break the beacon
