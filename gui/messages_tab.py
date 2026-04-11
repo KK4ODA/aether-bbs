@@ -45,6 +45,19 @@ _COL_READ_FG    = QColor(_TEXT_MUT)
 _COL_REPLIED_FG = QColor(_GREEN)
 
 
+class _SortableItem(QTableWidgetItem):
+    """QTableWidgetItem that sorts numerically when a sort_key is provided."""
+
+    def __init__(self, text: str, sort_key=None):
+        super().__init__(text)
+        self._sort_key = sort_key
+
+    def __lt__(self, other):
+        if self._sort_key is not None and isinstance(other, _SortableItem) and other._sort_key is not None:
+            return self._sort_key < other._sort_key
+        return super().__lt__(other)
+
+
 class MessagesTab(QWidget):
 
     def __init__(self, store: MessageStore, config: AppConfig = None, parent=None):
@@ -109,11 +122,10 @@ class MessagesTab(QWidget):
         )
         hdr = self._msg_table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)  # Subject fills
-        hdr.setStretchLastSection(False)
-        # Initial column widths: #, Status, Pri, From, To, Subject(stretch), Date, Area, CMS
-        for col, w in [(0, 36), (1, 55), (2, 30), (3, 90), (4, 90),
-                       (6, 130), (7, 70), (8, 55)]:
+        hdr.setStretchLastSection(True)  # CMS column stretches to fill remainder
+        # Initial column widths: #, Status, Pri, From, To, Subject, Date, Area, CMS(stretch)
+        for col, w in [(0, 36), (1, 70), (2, 30), (3, 90), (4, 90),
+                       (5, 200), (6, 130), (7, 60), (8, 80)]:
             hdr.resizeSection(col, w)
 
         self._msg_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -123,6 +135,7 @@ class MessagesTab(QWidget):
         self._msg_table.setShowGrid(False)
         self._msg_table.setWordWrap(False)
         self._msg_table.setSortingEnabled(True)
+        self._msg_table.sortByColumn(6, Qt.SortOrder.DescendingOrder)  # newest first
         self._msg_table.setMinimumHeight(250)
         self._msg_table.itemSelectionChanged.connect(self._on_selection)
         self._msg_table.itemDoubleClicked.connect(self._on_double_click)
@@ -262,7 +275,7 @@ class MessagesTab(QWidget):
             (8, cms_str),
         ]
         for col, text in cells:
-            item = QTableWidgetItem(text)
+            item = _SortableItem(text, seq if col == 0 else None)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._msg_table.setItem(row, col, item)
 

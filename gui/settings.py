@@ -591,9 +591,11 @@ class SettingsTab(QScrollArea):
         self._tactical_table.setToolTip(
             "Callsigns that trigger priority alerts when a message\n"
             "is addressed to them (e.g. EMCOMM, SHELTER, WEATHER).\n"
-            "Advertise = include in APRS beacon for discovery."
+            "Advertise = include in APRS beacon for discovery.\n"
+            "Tactical addresses share the gateway Winlink password."
         )
-        self._tactical_table.setHorizontalHeaderLabels(["Callsign (max 8)", "Alert Phrase (spoken by TTS)", "Advertise"])
+        self._tactical_table.setHorizontalHeaderLabels(
+            ["Callsign (max 8)", "Alert Phrase (spoken by TTS)", "Advertise"])
         self._tactical_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._tactical_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._tactical_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)

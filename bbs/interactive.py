@@ -845,8 +845,9 @@ class InteractiveSession:
         """On-demand Winlink CMS check for the connected RF user.
 
         Polls for the user's own callsign (if WLREG'd) AND the active
-        tactical address (if set and configured with a Winlink password),
-        in a single CMS sync.
+        tactical address (if set), in a single CMS sync.  Tactical
+        addresses share the gateway's Winlink password since they are
+        aliases for the BBS station, not separate Winlink accounts.
         """
         if not self._pat_client or not self._pat_client.is_enabled:
             self._send("Winlink is not enabled on this BBS.\r\n")
@@ -864,45 +865,33 @@ class InteractiveSession:
             enc_pw = prefs.get("winlink_password", "")
             user_pw = decrypt_value(enc_pw, machine) if enc_pw else ""
 
-        # ── Tactical address Winlink credentials ───────────────────────
-        tactical_pw = ""
-        if self._tactical_call:
-            ta_entry = next(
-                (ta for ta in self._config.station.tactical_addresses
-                 if ta.callsign.upper() == self._tactical_call),
-                None,
-            )
-            if ta_entry and ta_entry.winlink_password:
-                tactical_pw = decrypt_value(ta_entry.winlink_password, machine) or ""
+        # ── Tactical address shares the user's Winlink credentials ─────
+        # Tactical addresses are aliases registered under the same
+        # Winlink account as the connecting user, so they use the same
+        # password the user provided via WLREG.
 
-        # Must have at least one pollable address
-        if not user_pw and not tactical_pw:
-            if self._tactical_call and not tactical_pw:
-                self._send(
-                    f"Tactical address {self._tactical_call} has no Winlink password configured.\r\n"
-                    "Ask the sysop to set one in BBS Settings.\r\n"
-                )
+        # Must have credentials to poll
+        if not user_pw:
             if not user_registered:
                 self._send(
                     "You are not registered for Winlink forwarding.\r\n"
                     "Use WLREG to register first.\r\n"
                 )
+            else:
+                self._send(
+                    "No Winlink password on file. Use WLREG to re-register.\r\n"
+                )
             self._show_prompt()
             return
 
         # ── Build poll addresses ───────────────────────────────────────
-        # Primary = user callsign (or tactical if user not registered)
-        # Extra = tactical address (if user is primary)
+        # Primary = user callsign
+        # Extra = tactical address using the same password
         extra = []
-        if user_pw:
-            primary_call = self.remote_call
-            primary_pw = user_pw
-            if tactical_pw:
-                extra.append((self._tactical_call, tactical_pw))
-        else:
-            # User not registered, poll tactical only
-            primary_call = self._tactical_call
-            primary_pw = tactical_pw
+        primary_call = self.remote_call
+        primary_pw = user_pw
+        if self._tactical_call:
+            extra.append((self._tactical_call, user_pw))
 
         polling_for = [primary_call]
         if extra:
@@ -1034,7 +1023,8 @@ class InteractiveSession:
             else:
                 self._send("Message saved (Winlink not available — held locally).\r\n")
         else:
-            # Local message — skip outbound queue, held for RF pickup
+            # Local message — mark LOCAL so the auto-router doesn't queue it
+            self._store.set_cms_status(mid, "LOCAL")
             self._send("Message saved (local — held for RF pickup).\r\n")
         self._show_prompt()
 
