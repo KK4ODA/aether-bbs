@@ -795,15 +795,19 @@ class SettingsTab(QScrollArea):
         vara_form.addRow("Exe path:", exe_widget)
 
         self._inst_cmd_port = QSpinBox()
-        self._inst_cmd_port.setRange(1024, 65535)
-        self._inst_cmd_port.setToolTip("TCP port for VARA command/control channel.\nDefault: 8300. Must differ from Data port.")
+        self._inst_cmd_port.setRange(1024, 65534)
+        self._inst_cmd_port.setToolTip("TCP port for VARA command/control channel.\nDefault: 8300.")
         self._inst_cmd_port.valueChanged.connect(self._on_inst_field_changed)
+        self._inst_cmd_port.valueChanged.connect(
+            lambda v: self._inst_data_port.setValue(v + 1))
         vara_form.addRow("CMD port:", self._inst_cmd_port)
 
         self._inst_data_port = QSpinBox()
-        self._inst_data_port.setRange(1024, 65535)
-        self._inst_data_port.setToolTip("TCP port for VARA data channel (RF payload).\nDefault: 8301. Must differ from CMD port.")
-        self._inst_data_port.valueChanged.connect(self._on_inst_field_changed)
+        self._inst_data_port.setRange(1025, 65535)
+        self._inst_data_port.setReadOnly(True)
+        self._inst_data_port.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._inst_data_port.setToolTip("Data port is always CMD port + 1.")
+        self._inst_data_port.setStyleSheet("background: #3a3a3a; color: #888;")
         vara_form.addRow("Data port:", self._inst_data_port)
 
         self._inst_default_path = QLineEdit()
@@ -842,6 +846,17 @@ class SettingsTab(QScrollArea):
         self._inst_sm_protocol.setToolTip("AGWPE — binary frame protocol (most common)\nKISS — serial TNC protocol (planned)")
         self._inst_sm_protocol.currentTextChanged.connect(self._on_inst_field_changed)
         sm_form.addRow("Protocol:", self._inst_sm_protocol)
+
+        self._inst_sm_auto_launch = QCheckBox("Auto-launch Soundmodem")
+        self._inst_sm_auto_launch.setToolTip("Start the Soundmodem executable\nautomatically with this instance.")
+        self._inst_sm_auto_launch.toggled.connect(self._on_inst_field_changed)
+        sm_form.addRow(self._inst_sm_auto_launch)
+
+        self._inst_sm_exe = QLineEdit()
+        self._inst_sm_exe.setPlaceholderText("Path to Soundmodem.exe")
+        self._inst_sm_exe.setToolTip("Full path to the Soundmodem / Direwolf executable.")
+        self._inst_sm_exe.textChanged.connect(self._on_inst_field_changed)
+        sm_form.addRow("Exe Path:", self._inst_sm_exe)
 
         self._inst_soundmodem_group.setVisible(False)
         dl.addWidget(self._inst_soundmodem_group)
@@ -972,7 +987,7 @@ class SettingsTab(QScrollArea):
         d["frequency_label"]  = self._inst_freq.text()
         d["executable_path"]  = self._inst_exe.text()
         d["cmd_port"]         = self._inst_cmd_port.value()
-        d["data_port"]        = self._inst_data_port.value()
+        d["data_port"]        = self._inst_cmd_port.value() + 1
         d["default_path"]     = self._inst_default_path.text()
         d["bandwidth"]        = int(self._inst_bw.currentText())
         d["auto_start"]       = self._inst_auto_start.isChecked()
@@ -983,6 +998,8 @@ class SettingsTab(QScrollArea):
             "host": self._inst_sm_host.text() or "127.0.0.1",
             "port": self._inst_sm_port.value(),
             "protocol": self._inst_sm_protocol.currentText(),
+            "auto_launch": self._inst_sm_auto_launch.isChecked(),
+            "exe_path": self._inst_sm_exe.text().strip(),
         })
         # PTT method from combo; rest of PTTConfig preserved from dialog
         ptt = d["ptt"]
@@ -1033,6 +1050,8 @@ class SettingsTab(QScrollArea):
         proto = getattr(sm, "protocol", "AGWPE")
         if proto in ("AGWPE", "KISS"):
             self._inst_sm_protocol.setCurrentText(proto)
+        self._inst_sm_auto_launch.setChecked(getattr(sm, "auto_launch", False))
+        self._inst_sm_exe.setText(getattr(sm, "exe_path", ""))
 
         self._inst_auto_start.setChecked(d.get("auto_start", False))
         self._inst_enabled.setChecked(d.get("enabled", True))

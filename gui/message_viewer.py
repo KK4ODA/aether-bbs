@@ -503,8 +503,8 @@ class PriorityAlertWindow(QDialog):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.WindowCloseButtonHint
         )
-        self.setMinimumSize(520, 380)
-        self.resize(600, 460)
+        self.setMinimumSize(520, 480)
+        self.resize(620, 540)
 
         cfg_alert = config.alert
         title_font_size = "14pt" if cfg_alert.large_font else "11pt"
@@ -530,7 +530,7 @@ class PriorityAlertWindow(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(14, 14, 14, 18)
 
         # ── Priority banner ───────────────────────────────────────────────
         banner = QLabel("⚠  PRIORITY MESSAGE  ⚠")

@@ -34,8 +34,10 @@ HELP_TEXT = """\r
 Commands:\r
   L [area]    - List personal messages\r
   R <n>       - Read message n\r
-  S <call>    - Send personal message to callsign\r
+  S <call>    - Send local message (held for RF pickup)\r
+  SW <call>   - Send via Winlink CMS\r
   K <n>       - Kill (delete) your message n\r
+  KA          - Kill ALL messages (sysop only)\r
   A           - List message areas\r
   U           - Your personal messages\r
   N           - New messages since last login\r
@@ -55,10 +57,11 @@ Commands:\r
   P <n>       - Set pager lines (default 20)\r
   CH          - Chat with sysop (if available)\r
   CHAT [room] - Join multi-user chat room (default: LOCAL)\r
-  S user@addr - Send via Winlink (email addresses route automatically)\r
+  S user@addr - Send via Winlink (email addresses always route to CMS)\r
   WL          - Check Winlink CMS for your mail (on-demand)\r
   WLREG       - Register for Winlink email forwarding\r
   WLOFF       - Unregister from Winlink forwarding\r
+  TACTICAL <addr> - Set tactical address for WL/send (TACTICAL OFF to clear)\r
   SETPASS <pw>- Set or change your login password\r
   REGISTER    - Request access (if not yet registered)\r
   B / 73      - Bye\r
@@ -141,6 +144,7 @@ class InteractiveSession:
         )
         self._b2f_handoff = b2f_handoff_fn
         self._role = None  # set during access gate in run()
+        self._tactical_call: Optional[str] = None  # active tactical address for session
 
         # Set when a new message for this station arrives mid-session.
         # Checked at every _show_prompt so the notification appears between commands.
@@ -510,6 +514,42 @@ class InteractiveSession:
             self._disconnect()
             return False
 
+    # ── Tactical address ─────────────────────────────────────────────────
+
+    def _set_tactical(self, requested: str, machine_readable: bool = False):
+        """Set or clear the session tactical address."""
+        if not requested or requested == "OFF":
+            self._tactical_call = None
+            if machine_readable:
+                self._send(";TACTICAL OK cleared\r\n")
+            else:
+                self._send("Tactical address cleared.\r\n")
+                self._show_prompt()
+            return
+
+        # Validate against configured tactical addresses
+        valid = {ta.callsign.upper() for ta in self._config.station.tactical_addresses
+                 if ta.callsign}
+        if requested not in valid:
+            if machine_readable:
+                self._send(f";TACTICAL FAIL not configured\r\n")
+            else:
+                avail = ", ".join(sorted(valid)) or "none"
+                self._send(
+                    f"Tactical address '{requested}' is not configured.\r\n"
+                    f"Available: {avail}\r\n"
+                )
+                self._show_prompt()
+            return
+
+        self._tactical_call = requested
+        if machine_readable:
+            self._send(f";TACTICAL OK {requested}\r\n")
+        else:
+            self._send(f"Tactical address set to {requested}\r\n")
+            self._send(f"WL will poll for {requested}. Outbound messages will be sent from {requested}.\r\n")
+            self._show_prompt()
+
     # ── Command dispatch ──────────────────────────────────────────────────
 
     def _handle_command(self, cmd: str):
@@ -527,6 +567,17 @@ class InteractiveSession:
         # ── Machine-readable transport query (for terminal auto-detect) ──
         if upper.startswith(";TRANSPORT"):
             self._send(f";TRANSPORT {self._transport_label}\r\n")
+            self._show_prompt()
+            return
+
+        # ── Tactical address (machine-readable or user-typed) ──────────
+        if upper.startswith(";TACTICAL ") or upper.startswith("TACTICAL "):
+            machine_readable = upper.startswith(";")
+            arg = cmd.split(None, 1)[1].strip().upper() if " " in cmd else ""
+            self._set_tactical(arg, machine_readable)
+            return
+        if upper == "TACTICAL":
+            self._send("Usage: TACTICAL <address> or TACTICAL OFF\r\n")
             self._show_prompt()
             return
 
@@ -615,9 +666,16 @@ class InteractiveSession:
         elif upper.startswith("R ") and not upper.startswith("RB"):
             self._cmd_read(upper[2:].strip())
 
+        elif upper.startswith("SW "):
+            dest = cmd[3:].strip()
+            self._cmd_send(dest, force_winlink=True)
+
         elif upper.startswith("S ") and not upper.startswith("SB"):
             dest = cmd[2:].strip()
             self._cmd_send(dest)
+
+        elif upper == "KA":
+            self._cmd_kill_all()
 
         elif upper.startswith("K ") and not upper.startswith("KB"):
             self._cmd_kill(upper[2:].strip())
@@ -784,39 +842,81 @@ class InteractiveSession:
         self._show_prompt()
 
     def _cmd_wl_poll(self):
-        """On-demand Winlink CMS check for the connected RF user."""
+        """On-demand Winlink CMS check for the connected RF user.
+
+        Polls for the user's own callsign (if WLREG'd) AND the active
+        tactical address (if set and configured with a Winlink password),
+        in a single CMS sync.
+        """
         if not self._pat_client or not self._pat_client.is_enabled:
             self._send("Winlink is not enabled on this BBS.\r\n")
             self._show_prompt()
             return
 
-        # Check if user is registered for Winlink
+        from core.crypto import decrypt_value
+        machine = self._config.security.machine_secret or ""
+
+        # ── User's own Winlink credentials ─────────────────────────────
         prefs = self._store.get_user_prefs(self.remote_call)
-        if not prefs.get("winlink_registered"):
-            self._send(
-                "You are not registered for Winlink forwarding.\r\n"
-                "Use WLREG to register first.\r\n"
+        user_registered = prefs.get("winlink_registered", False)
+        user_pw = ""
+        if user_registered:
+            enc_pw = prefs.get("winlink_password", "")
+            user_pw = decrypt_value(enc_pw, machine) if enc_pw else ""
+
+        # ── Tactical address Winlink credentials ───────────────────────
+        tactical_pw = ""
+        if self._tactical_call:
+            ta_entry = next(
+                (ta for ta in self._config.station.tactical_addresses
+                 if ta.callsign.upper() == self._tactical_call),
+                None,
             )
+            if ta_entry and ta_entry.winlink_password:
+                tactical_pw = decrypt_value(ta_entry.winlink_password, machine) or ""
+
+        # Must have at least one pollable address
+        if not user_pw and not tactical_pw:
+            if self._tactical_call and not tactical_pw:
+                self._send(
+                    f"Tactical address {self._tactical_call} has no Winlink password configured.\r\n"
+                    "Ask the sysop to set one in BBS Settings.\r\n"
+                )
+            if not user_registered:
+                self._send(
+                    "You are not registered for Winlink forwarding.\r\n"
+                    "Use WLREG to register first.\r\n"
+                )
             self._show_prompt()
             return
 
-        from core.crypto import decrypt_value
-        enc_pw = prefs.get("winlink_password", "")
-        machine = self._config.security.machine_secret or ""
-        password = decrypt_value(enc_pw, machine)
-        if not password:
-            self._send(
-                "No Winlink password on file. Use WLREG to re-register.\r\n"
-            )
-            self._show_prompt()
-            return
+        # ── Build poll addresses ───────────────────────────────────────
+        # Primary = user callsign (or tactical if user not registered)
+        # Extra = tactical address (if user is primary)
+        extra = []
+        if user_pw:
+            primary_call = self.remote_call
+            primary_pw = user_pw
+            if tactical_pw:
+                extra.append((self._tactical_call, tactical_pw))
+        else:
+            # User not registered, poll tactical only
+            primary_call = self._tactical_call
+            primary_pw = tactical_pw
+
+        polling_for = [primary_call]
+        if extra:
+            polling_for.extend(c for c, _ in extra)
 
         self._send(
-            "Connecting to Winlink CMS... this may take 30-120 seconds.\r\n"
-            "Please wait.\r\n"
+            f"Connecting to Winlink CMS for {', '.join(polling_for)}...\r\n"
+            "This may take 30-120 seconds. Please wait.\r\n"
         )
 
-        result = self._pat_client.poll_for_user(self.remote_call, password)
+        result = self._pat_client.poll_for_user(
+            primary_call, primary_pw,
+            extra_addresses=extra or None,
+        )
 
         if result.error:
             self._send(f"Winlink sync error: {result.error}\r\n")
@@ -893,13 +993,17 @@ class InteractiveSession:
         self._store.mark_read(row["id"])
         self._show_prompt()
 
-    def _cmd_send(self, dest_call: str):
+    def _cmd_send(self, dest_call: str, force_winlink: bool = False):
         if not dest_call:
-            self._send("Usage: S <callsign>\r\n")
+            usage = "Usage: SW <callsign>\r\n" if force_winlink else "Usage: S <callsign>\r\n"
+            self._send(usage)
             self._show_prompt()
             return
 
-        self._send(f"To: {dest_call.upper()}\r\n")
+        # Email addresses always go via Winlink regardless of S vs SW
+        has_at = "@" in dest_call
+        via_label = "Winlink" if (force_winlink or has_at) else "Local"
+        self._send(f"To: {dest_call.upper()}  [{via_label}]\r\n")
         self._send("Subject: ")
         subject = self._get_line(timeout=self._config.bbs.session_timeout) or ""
 
@@ -912,8 +1016,9 @@ class InteractiveSession:
             lines.append(line)
 
         body_text = "\r\n".join(lines)
+        from_call = self._tactical_call or self.remote_call
         mid = self._store.save_message(
-            from_call=self.remote_call,
+            from_call=from_call,
             to_call=dest_call.upper(),
             subject=subject.strip(),
             body=body_text.encode("utf-8"),
@@ -921,15 +1026,16 @@ class InteractiveSession:
         )
         self._msgs_recv += 1
 
-        # Route to Winlink if destination is an email or non-local callsign
-        if self._outbound_queue:
-            route = self._outbound_queue.route_message(mid)
-            if route == "QUEUED":
+        # Routing: SW or email → Winlink CMS; plain S → local RF pickup
+        if force_winlink or has_at:
+            if self._outbound_queue:
+                self._outbound_queue.queue_for_cms(mid)
                 self._send("Message saved and queued for Winlink delivery.\r\n")
             else:
-                self._send("Message saved.\r\n")
+                self._send("Message saved (Winlink not available — held locally).\r\n")
         else:
-            self._send("Message saved.\r\n")
+            # Local message — skip outbound queue, held for RF pickup
+            self._send("Message saved (local — held for RF pickup).\r\n")
         self._show_prompt()
 
     def _cmd_kill(self, idx_str: str):
@@ -954,6 +1060,25 @@ class InteractiveSession:
 
         self._store.delete_message(msg["id"])
         self._send(f"Message {idx+1} deleted.\r\n")
+        self._show_prompt()
+
+    def _cmd_kill_all(self):
+        """Delete all messages. Sysop only."""
+        if not self._is_sysop:
+            self._send("Only the sysop can delete all messages.\r\n")
+            self._show_prompt()
+            return
+
+        self._send("Delete ALL messages? This cannot be undone. [Y/N] ")
+        answer = self._get_line(timeout=self._config.bbs.session_timeout) or ""
+        if answer.strip().upper() != "Y":
+            self._send("Cancelled.\r\n")
+            self._show_prompt()
+            return
+
+        count = self._store.delete_all_messages()
+        self._send(f"Deleted {count} message(s).\r\n")
+        log.info(f"Sysop {self.remote_call} deleted all messages ({count})")
         self._show_prompt()
 
     def _cmd_areas(self):

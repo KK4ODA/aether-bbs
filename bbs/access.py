@@ -55,8 +55,8 @@ COMMAND_PERMISSIONS: dict[str, Role] = {
     "QUIT": Role.APPROVED, "EXIT": Role.APPROVED,
 
     # Personal messages — APPROVED+
-    "L": Role.APPROVED,  "R": Role.APPROVED,  "S":  Role.APPROVED,
-    "K": Role.APPROVED,  "A": Role.APPROVED,  "U":  Role.APPROVED,
+    "L": Role.APPROVED,  "R": Role.APPROVED,  "S":  Role.APPROVED,  "SW": Role.APPROVED,
+    "K": Role.APPROVED,  "KA": Role.SYSOP,  "A": Role.APPROVED,  "U":  Role.APPROVED,
     "N": Role.APPROVED,
 
     # Chat — APPROVED+

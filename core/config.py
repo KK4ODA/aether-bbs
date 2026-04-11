@@ -27,9 +27,10 @@ log = logging.getLogger(__name__)
 
 class TacticalAddress(BaseModel):
     """A tactical callsign that triggers a priority alert, with its own spoken phrase."""
-    callsign:     str  = Field(default="", max_length=8)
-    alert_phrase: str  = Field(default="Priority message received", max_length=120)
-    advertised:   bool = True   # show this address in the connect banner
+    callsign:          str  = Field(default="", max_length=8)
+    alert_phrase:      str  = Field(default="Priority message received", max_length=120)
+    advertised:        bool = True   # show this address in the connect banner
+    winlink_password:  str  = ""     # Winlink CMS password (encrypted at rest, ENC: prefix)
 
 
 class StationConfig(BaseModel):
@@ -198,6 +199,8 @@ class SoundmodemConfig(BaseModel):
     port:           int  = Field(default=8000, ge=1, le=65535)  # AGWPE=8000, KISS varies
     my_callsign:    str  = ""     # station callsign for AX.25
     my_ssid:        int  = Field(default=0, ge=0, le=15)
+    exe_path:       str  = ""     # path to Soundmodem / Direwolf executable
+    auto_launch:    bool = False  # start the executable automatically
 
 
 class AetherConfig(BaseModel):
@@ -572,6 +575,17 @@ class ConfigManager:
             cfg = AppConfig.model_validate(data)
             changed = True
             log.info("Encrypted Winlink gateway_password at rest")
+
+        # Encrypt tactical address Winlink passwords at rest
+        if machine:
+            for ta in data.get("station", {}).get("tactical_addresses", []):
+                ta_pw = ta.get("winlink_password", "")
+                if ta_pw and not ta_pw.startswith(ENC_PREFIX):
+                    ta["winlink_password"] = encrypt_value(ta_pw, machine)
+                    changed = True
+                    log.info(f"Encrypted tactical Winlink password for {ta.get('callsign', '?')}")
+            if changed:
+                cfg = AppConfig.model_validate(data)
 
         return cfg, changed
 

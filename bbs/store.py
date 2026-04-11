@@ -424,6 +424,15 @@ class MessageStore:
             self._conn.execute("DELETE FROM messages WHERE id=?", (mid,))
             self._conn.commit()
 
+    def delete_all_messages(self) -> int:
+        """Delete all messages. Returns the number deleted."""
+        with self._lock:
+            cur = self._conn.execute("SELECT COUNT(*) FROM messages")
+            count = cur.fetchone()[0]
+            self._conn.execute("DELETE FROM messages")
+            self._conn.commit()
+            return count
+
     def has_message(self, mid: str) -> bool:
         with self._lock:
             cur = self._conn.execute(

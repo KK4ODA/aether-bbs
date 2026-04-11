@@ -30,6 +30,7 @@ class InstanceStatus:
         self.process_state: ProcessState = ProcessState.STOPPED
         self.mux:           Optional[VARAFMMux] = None
         self.process:       Optional[VARAFMProcess] = None
+        self.subprocess:    Optional[object] = None   # raw Popen for soundmodem
         self.bytes_tx:      int = 0
         self.bytes_rx:      int = 0
         self.sessions_total: int = 0
@@ -193,10 +194,42 @@ class VARAFMInstanceManager:
         self._start_vara_instance(status)
 
     def _start_soundmodem_instance(self, status: InstanceStatus):
-        """Start a Soundmodem/AX.25 instance via AGWPE or KISS broker."""
+        """Start a Soundmodem/AX.25 instance via AGWPE or KISS broker.
+
+        If the soundmodem config has ``auto_launch=True`` and a valid
+        ``exe_path``, the executable is started before connecting.
+        """
         cfg = status.cfg
         sm = cfg.soundmodem
         protocol = sm.protocol.upper()
+
+        # Auto-launch soundmodem executable if configured
+        if sm.auto_launch and sm.exe_path:
+            import os, subprocess
+            if os.path.isfile(sm.exe_path):
+                try:
+                    proc = subprocess.Popen([sm.exe_path], shell=False)
+                    status.subprocess = proc
+                    log.info(
+                        f"[{cfg.name}] Soundmodem started: {sm.exe_path} "
+                        f"(PID {proc.pid})"
+                    )
+                    status.process_state = ProcessState.RUNNING
+                    self._bus.emit(
+                        EventType.VARA_PROCESS_UP, source=cfg.name,
+                        data={"pid": proc.pid, "exe": sm.exe_path},
+                    )
+                    # Give the process time to open its AGWPE port
+                    import time
+                    time.sleep(3.0)
+                except Exception as e:
+                    log.error(
+                        f"[{cfg.name}] Failed to launch soundmodem: {e}"
+                    )
+            else:
+                log.warning(
+                    f"[{cfg.name}] Soundmodem exe not found: {sm.exe_path}"
+                )
 
         if protocol == "AGWPE":
             from transport.agwpe_broker import AGWPEBroker
@@ -406,6 +439,21 @@ class VARAFMInstanceManager:
         if status.process:
             status.process.stop()
             status.process = None
+        if status.subprocess:
+            try:
+                import os, subprocess as _sp
+                pid = status.subprocess.pid
+                if status.subprocess.poll() is None:
+                    log.info(f"[{cfg.name}] Terminating soundmodem PID {pid}")
+                    if os.name == "nt":
+                        _sp.call(["taskkill", "/F", "/T", "/PID", str(pid)],
+                                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                    else:
+                        status.subprocess.terminate()
+                    status.subprocess.wait(timeout=5)
+            except Exception as e:
+                log.error(f"[{cfg.name}] Error stopping soundmodem: {e}")
+            status.subprocess = None
 
     def _on_proc_state(self, name: str, state: ProcessState):
         with self._lock:

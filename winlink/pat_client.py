@@ -220,11 +220,16 @@ class PatClient:
             return None
         return self._do_poll()
 
-    def poll_for_user(self, callsign: str, password: str) -> PollResult:
+    def poll_for_user(self, callsign: str, password: str,
+                      extra_addresses: list[tuple[str, str]] | None = None,
+                      ) -> PollResult:
         """One-shot CMS sync that includes a specific user's callsign.
 
         Temporarily adds CALL:password to Pat's auxiliary_addresses,
         runs a CMS sync, then restores the config.  Thread-safe.
+
+        *extra_addresses* is an optional list of ``(callsign, password)``
+        tuples to include in the same sync (e.g. tactical addresses).
 
         Returns PollResult with sent/received counts or error.
         """
@@ -270,6 +275,11 @@ class PatClient:
                 user_entry = f"{callsign.upper()}:{password}" if password else callsign.upper()
                 if user_entry not in aux and callsign.upper() not in aux:
                     aux.append(user_entry)
+                # Also add any extra addresses (e.g., tactical callsigns)
+                for ex_call, ex_pw in (extra_addresses or []):
+                    ex_entry = f"{ex_call.upper()}:{ex_pw}" if ex_pw else ex_call.upper()
+                    if ex_entry not in aux and ex_call.upper() not in aux:
+                        aux.append(ex_entry)
                 pcfg["auxiliary_addresses"] = aux
                 with open(path, "w") as f:
                     json.dump(pcfg, f, indent=2)
