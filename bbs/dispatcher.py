@@ -65,6 +65,7 @@ class InstanceSessionHandler:
 
     def on_data(self, data: bytes):
         """Called by VARAFMMux when data arrives from the remote station."""
+        log.info(f"[{self.instance_name}] RX {len(data)} bytes: {data[:80]!r}")
         if self._raw_mode:
             # B2F is receiving binary message body — route only to raw queue
             self._raw_queue.put(data)

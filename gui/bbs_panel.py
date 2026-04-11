@@ -446,6 +446,17 @@ class BBSStatusPanel(QWidget):
         )
         action_row.addWidget(self._promote_btn)
 
+        self._sysop_btn = QPushButton("⬆ Sysop")
+        self._sysop_btn.setFixedHeight(24)
+        self._sysop_btn.setToolTip("Promote selected user to SYSOP (full admin)")
+        self._sysop_btn.clicked.connect(lambda: self._set_user_role("SYSOP"))
+        self._sysop_btn.setStyleSheet(
+            "QPushButton { background:#9b59b6; color:#fff; border:none; "
+            "border-radius:4px; padding:4px 10px; font-weight:600; }"
+            "QPushButton:hover { background:#8e44ad; }"
+        )
+        action_row.addWidget(self._sysop_btn)
+
         self._block_btn = QPushButton("⛔ Block")
         self._block_btn.setFixedHeight(24)
         self._block_btn.setToolTip("Block selected user")
@@ -856,7 +867,7 @@ class BBSStatusPanel(QWidget):
         callsign = d.get("callsign", "?")
         instance = d.get("instance", "")
         ref = d.get("community_ref", "")
-        msg = f"🔔 Registration request: {callsign}"
+        msg = f"NEW Registration request: {callsign}"
         if instance:
             msg += f" (via {instance})"
         if ref and ref.upper() != "NONE":
@@ -871,7 +882,7 @@ class BBSStatusPanel(QWidget):
         from PyQt6.QtCore import QMetaObject, Q_ARG
         QMetaObject.invokeMethod(self, "_show_access_request",
             Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, f"⚠️ Auth failure: {callsign}"))
+            Q_ARG(str, f"AUTH FAIL: {callsign}"))
 
     @pyqtSlot(str)
     def _show_access_request(self, msg: str):
@@ -1022,7 +1033,7 @@ class BBSStatusPanel(QWidget):
         form.addRow("Callsign:", call_edit)
 
         role_combo = QComboBox()
-        role_combo.addItems(["APPROVED", "TRUSTED", "PENDING", "BLOCKED"])
+        role_combo.addItems(["APPROVED", "TRUSTED", "SYSOP", "PENDING", "BLOCKED"])
         form.addRow("Role:", role_combo)
 
         notes_edit = QLineEdit()

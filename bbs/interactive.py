@@ -240,7 +240,10 @@ class InteractiveSession:
                     self._send(f"  {ta.callsign:<10}{ta.alert_phrase}\r\n")
 
             # ── Authentication (if password set) ─────────────────────
-            if self._access and not self._is_sysop:
+            # Sysop must also authenticate over RF — callsign SSIDs are
+            # not cryptographically verified, so any station transmitting
+            # as KK4ODA-N would otherwise get unauthenticated sysop access.
+            if self._access:
                 if not self._authenticate_if_required():
                     return
 
@@ -472,6 +475,14 @@ class InteractiveSession:
         self._send("> ")
 
         line = self._get_line(timeout=120)
+        # The TERM client may send ";TRANSPORT?" before the auth response.
+        # Consume and reply to it so the real auth line is read next.
+        while (line is not None and isinstance(line, str)
+               and line is not _RF_DISCONNECTED
+               and line.strip().upper().startswith(";TRANSPORT")):
+            self._send(f";TRANSPORT {self._transport_label}\r\n")
+            line = self._get_line(timeout=120)
+
         if line is None or not isinstance(line, str) or line is _RF_DISCONNECTED:
             self._send("Authentication timed out.\r\n")
             self._access.record_auth_failure(self.remote_call)

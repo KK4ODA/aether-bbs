@@ -324,6 +324,10 @@ class VARAFMInterface:
                 if not data:
                     break
                 self._rx_queue.put(data)
+            except socket.timeout:
+                # Data socket uses settimeout(30s).  Timeouts are normal
+                # during idle/listening — just retry.
+                continue
             except OSError:
                 break
 

@@ -300,10 +300,6 @@ class VARAStatusPanel(QScrollArea):
                 self._cards[inst_cfg.name] = card
                 layout.addWidget(card)
 
-        # Push remaining content toward the bottom so instance cards
-        # have room to grow when more are added.
-        layout.addStretch()
-
         # ── Recently Heard Stations ──────────────────────────────────
         if self._store:
             heard_group = QGroupBox("Recently Heard Stations")
@@ -336,6 +332,7 @@ class VARAStatusPanel(QScrollArea):
             hg_layout.addLayout(heard_btn_row)
             layout.addWidget(heard_group)
 
+        layout.addStretch()
         self.setWidget(container)
         self.setWidgetResizable(True)
         self.setMinimumWidth(300)
