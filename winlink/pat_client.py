@@ -263,7 +263,10 @@ class PatClient:
                         )
                         return result
 
-            # Temporarily add user to Pat's auxiliary_addresses
+            # Temporarily switch Pat's identity to the polling user so
+            # CMS authenticates as their callsign (not the gateway).
+            # Tactical/extra addresses are added to auxiliary_addresses
+            # and share the user's password.
             path = self._pat_config_path()
             original_config = None
             if path and os.path.isfile(path):
@@ -271,16 +274,27 @@ class PatClient:
                     original_config = f.read()
 
                 pcfg = json.loads(original_config)
-                aux = list(pcfg.get("auxiliary_addresses", []))
-                user_entry = f"{callsign.upper()}:{password}" if password else callsign.upper()
-                if user_entry not in aux and callsign.upper() not in aux:
-                    aux.append(user_entry)
-                # Also add any extra addresses (e.g., tactical callsigns)
+
+                # Switch primary identity to the user
+                user_call = callsign.upper()
+                pcfg["mycall"] = user_call
+                pcfg["secure_login_password"] = password
+
+                # Update telnet alias to authenticate as the user
+                aliases = pcfg.get("connect_aliases", {})
+                aliases["telnet"] = (
+                    f"telnet:///{user_call}:CMSTelnet"
+                    f"@cms.winlink.org:8772/wl2k"
+                )
+                pcfg["connect_aliases"] = aliases
+
+                # Add extra addresses (e.g., tactical callsigns)
+                aux = []
                 for ex_call, ex_pw in (extra_addresses or []):
                     ex_entry = f"{ex_call.upper()}:{ex_pw}" if ex_pw else ex_call.upper()
-                    if ex_entry not in aux and ex_call.upper() not in aux:
-                        aux.append(ex_entry)
+                    aux.append(ex_entry)
                 pcfg["auxiliary_addresses"] = aux
+
                 with open(path, "w") as f:
                     json.dump(pcfg, f, indent=2)
 
