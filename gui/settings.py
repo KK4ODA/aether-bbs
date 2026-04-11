@@ -1178,7 +1178,7 @@ class SettingsTab(QScrollArea):
         d = self._inst_data[idx]
         method = self._inst_ptt_method.currentText()
         name = d["name"]
-        mode = d["mode"]
+        transport = d.get("transport", "VARA_FM")
 
         if method == "VOX":
             self._ptt_test_label.setText(
@@ -1188,9 +1188,9 @@ class SettingsTab(QScrollArea):
             self._ptt_test_label.setStyleSheet("color:orange;")
             return
 
-        if mode == "FM":
+        if transport in ("VARA_FM", "SOUNDMODEM"):
             self._ptt_test_label.setText(
-                "ℹ VARA FM handles PTT internally — test not needed."
+                "ℹ FM/Soundmodem handles PTT internally — test not needed."
             )
             self._ptt_test_label.setStyleSheet("color:#80848e;")
             return

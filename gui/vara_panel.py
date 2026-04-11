@@ -55,19 +55,25 @@ class InstanceCard(QGroupBox):
         # Prefer fresh config passed at construction; fall back to instance manager
         if self._cfg:
             freq = self._cfg.frequency_label
-            mode = getattr(self._cfg, "mode", "FM")
+            transport = getattr(self._cfg, "transport", "VARA_FM")
         else:
             status = self._im.get_status(self._name)
-            freq   = status.cfg.frequency_label if status else ""
-            mode   = getattr(status.cfg, "mode", "FM") if status else "FM"
+            freq      = status.cfg.frequency_label if status else ""
+            transport  = getattr(status.cfg, "transport", "VARA_FM") if status else "VARA_FM"
 
-        # Header row: frequency label + FM/HF mode badge
+        # Short badge label from transport
+        badge_map = {"VARA_FM": "FM", "VARA_HF": "HF",
+                     "SOUNDMODEM": "AGWPE", "AETHER_HF": "AETHER"}
+        mode = badge_map.get(transport, transport)
+
+        # Header row: frequency label + transport badge
         header_row = QHBoxLayout()
         self._freq_lbl = QLabel(freq or "—")
         self._freq_lbl.setStyleSheet("font-weight:bold;font-size:10pt;")
         self._static_freq = freq or "—"  # config value to restore when scan stops
         mode_badge = QLabel(f" {mode} ")
-        badge_color = "#1a6b3a" if mode.upper() == "FM" else "#1a3f6b"
+        badge_color = {"FM": "#1a6b3a", "HF": "#1a3f6b",
+                       "AGWPE": "#6b3a1a", "AETHER": "#3a1a6b"}.get(mode, "#444")
         mode_badge.setStyleSheet(
             f"background:{badge_color};color:white;border-radius:3px;"
             "font-weight:bold;font-size:9pt;padding:1px 4px;"
