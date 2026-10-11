@@ -94,6 +94,18 @@ A companion terminal client lives in `terminal/` for connecting to the BBS via a
 - [AETHER HF](https://github.com/KK4ODA/aether-hf) — Open-source HF modem protocol (alternative to VARA HF)
 - [Pat](https://getpat.io) — Winlink client used for CMS integration
 
+<!-- tota-support:start -->
+## Support
+
+VARA BBS is free and stays free. It is written by KK4ODA, who also runs
+[Tiles on the Air](https://tilesontheair.com), a free program for portable
+operators, and both are kept going by the people who use them. If VARA BBS is
+useful to you, a contribution through the
+[Tiles on the Air giving page](https://tilesontheair.com/Giving) helps keep this tool and Tiles
+running. Nothing is ever locked behind it, and a bug report or an on-air
+report helps just as much.
+<!-- tota-support:end -->
+
 ## Contributors
 
 - **KK4ODA** (Facundo) — Author
