@@ -670,6 +670,9 @@ class SettingsTab(QScrollArea):
                 "soundmodem":       getattr(cfg, "soundmodem", SoundmodemConfig()),
                 "aether":           self._aether_for_edit(cfg),
                 "host":             getattr(cfg, "host", "127.0.0.1"),
+                # The saved instance: fields this tab does not edit
+                # (soundcard, auto_restart, restart_delay, …) come from it
+                "_base":            cfg,
                 "auto_start":       cfg.auto_start,
                 "enabled":          cfg.enabled,
             })
@@ -2928,6 +2931,27 @@ class SettingsTab(QScrollArea):
 
         return w
 
+    def _instance_updates(self, d: dict, freq_label: str) -> dict:
+        """The instance fields this tab edits, as InstanceConfig values."""
+        return {
+            "name":            d["name"],
+            "transport":       d.get("transport", "VARA_FM"),
+            "mode":            "",
+            "frequency_label": freq_label,
+            "executable_path": d.get("executable_path", ""),
+            "cmd_port":        d.get("cmd_port", 8300),
+            "data_port":       d.get("data_port", 8301),
+            "default_path":    d.get("default_path", ""),
+            "bandwidth":       d.get("bandwidth", 2300),
+            "ptt":             d.get("ptt", PTTConfig()),
+            "rig_control":     d.get("rig_control", RigControlConfig()),
+            "soundmodem":      d.get("soundmodem", SoundmodemConfig()),
+            "aether":          self._aether_for_save(d.get("aether", AetherConfig())),
+            "host":            d.get("host", "127.0.0.1"),
+            "auto_start":      d.get("auto_start", False),
+            "enabled":         d.get("enabled", True),
+        }
+
     def _aether_for_save(self, ae: AetherConfig) -> AetherConfig:
         """Encrypt the control token before it is written to the config."""
         machine = self._config.security.machine_secret
@@ -3340,23 +3364,11 @@ class SettingsTab(QScrollArea):
                     or freq_label.strip() == "(from scan table)"):
                 freq_label = ""
 
-            instances.append(InstanceConfig(
-                name=d["name"],
-                transport=d.get("transport", "VARA_FM"),
-                frequency_label=freq_label,
-                executable_path=d.get("executable_path", ""),
-                cmd_port=d.get("cmd_port", 8300),
-                data_port=d.get("data_port", 8301),
-                default_path=d.get("default_path", ""),
-                bandwidth=d.get("bandwidth", 2300),
-                ptt=d.get("ptt", PTTConfig()),
-                rig_control=d.get("rig_control", RigControlConfig()),
-                soundmodem=d.get("soundmodem", SoundmodemConfig()),
-                aether=self._aether_for_save(d.get("aether", AetherConfig())),
-                host=d.get("host", "127.0.0.1"),
-                auto_start=d.get("auto_start", False),
-                enabled=d.get("enabled", True),
-            ))
+            base = d.get("_base") or InstanceConfig()
+            instances.append(InstanceConfig.model_validate({
+                **base.model_dump(),
+                **self._instance_updates(d, freq_label),
+            }))
 
         # ── Bulletin areas ────────────────────────────────────────────────
         bulletin_areas = []
