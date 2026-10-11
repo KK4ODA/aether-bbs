@@ -147,3 +147,30 @@ def make_frame_from_vara_event(
         destination=src,    # our BBS is the destination
         frame_type="CONNECT",
     )
+
+
+# ── Frame encoding ───────────────────────────────────────────────────────────
+
+def _encode_address(addr: AX25Address, last: bool, command: bool) -> bytes:
+    """One 7-byte AX.25 address field (callsign shifted left, SSID byte)."""
+    call = addr.callsign.upper().ljust(6)[:6]
+    ssid = 0x60 | ((addr.ssid & 0x0F) << 1)
+    if command:
+        ssid |= 0x80
+    if last:
+        ssid |= 0x01
+    return bytes(ord(c) << 1 for c in call) + bytes([ssid])
+
+
+def encode_ui_frame(source: str, destination: str, info: bytes,
+                    path: Optional[list[str]] = None) -> bytes:
+    """An AX.25 UI frame (control 0x03, PID 0xF0, no FCS) — what an APRS
+    program hands a KISS TNC.  Raises ValueError for a bad callsign."""
+    addrs = [parse_callsign(destination), parse_callsign(source)]
+    addrs += [parse_callsign(p) for p in (path or [])]
+    if any(a is None for a in addrs):
+        raise ValueError(f"bad callsign in {destination!r}/{source!r}/{path!r}")
+    out = b""
+    for i, a in enumerate(addrs):
+        out += _encode_address(a, last=(i == len(addrs) - 1), command=(i == 0))
+    return out + b"\x03\xf0" + info

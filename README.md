@@ -60,7 +60,7 @@ delivery.
 - Configurable event triggers (new registrations, urgent bulletins, priority messages)
 
 ### Infrastructure
-- APRS-IS gateway with position beaconing
+- APRS-IS gateway with position beaconing, and APRS beacons on the air through Aether HF
 - Internet connectivity monitoring with automatic notifications
 - PyQt6 GUI with dashboard, message viewer, settings, packet monitor, and log viewer
 - TOML configuration with automatic migration and corrupt-config recovery
