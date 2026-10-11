@@ -150,7 +150,7 @@ def test_bulletins_cross_both_ways_over_rf(tmp_path):
 
         assert modem.peer_done.wait(10) and modem.peer_result is True
         assert "CONNECT W1AAA-10 W2BBB-10" in modem.commands
-        assert "DISCONNECT" in modem.commands
+        assert _wait(lambda: "DISCONNECT" in modem.commands, 5)
         assert b_store.has_message(a_mid)
         assert a_store.has_message(b_mid)
         got = [b for b in a_bbs.list_bulletins() if b["id"] == b_mid][0]
@@ -167,7 +167,7 @@ def test_unanswered_call_is_aborted_and_released(tmp_path, monkeypatch):
     fwd, nbr, broker, modem, *_ = _setup(tmp_path, answer=False)
     try:
         fwd._forward_with(nbr)
-        assert "ABORT" in modem.commands
+        assert _wait(lambda: "ABORT" in modem.commands, 5)
         assert not broker.outbound_active
         assert nbr._last_forwarded_at > 0      # not retried every minute
     finally:
