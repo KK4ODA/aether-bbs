@@ -266,6 +266,12 @@ class SessionDispatcher:
         if mux is None:
             log.error(f"No mux for instance {instance_name!r}")
             return
+        if getattr(mux, "outbound_active", False):
+            # Our own outbound call (RF forwarding) came up: it is already
+            # handled by whoever placed it.
+            log.info(f"[{instance_name}] Outbound session with {remote_call} "
+                     f"is up")
+            return
 
         # ── Per-transport lock (serialises within one modem) ─────────────
         handler = InstanceSessionHandler(mux, instance_name, self._bus)
@@ -432,6 +438,12 @@ class SessionDispatcher:
                 mux.send_cmd("DISCONNECT")
                 return
 
+        neighbour = self._rf_neighbour(remote_call)
+        if neighbour is not None:
+            self._run_forwarding_session(handler, remote_call, instance_name,
+                                         mux, neighbour)
+            return
+
         self._bus.emit(EventType.SESSION_STARTED, source=instance_name,
                        data={"remote_call": remote_call,
                              "session_type": "Interactive"})
@@ -451,6 +463,40 @@ class SessionDispatcher:
                 pass
             mux.send_cmd("DISCONNECT")
         finally:
+            mux.release_session(handler)
+            handler.set_active_session(None)
+
+    def _rf_neighbour(self, remote_call: str):
+        """The enabled RF forwarding neighbour ``remote_call`` is, or None."""
+        for n in getattr(self._live_config.bbs, "forwarding_neighbours", []):
+            if n.enabled and n.via == "RF" and n.matches(remote_call):
+                return n
+        return None
+
+    def _run_forwarding_session(self, handler, remote_call, instance_name,
+                                mux, neighbour):
+        """A neighbour BBS called to forward bulletins: answer with the
+        forwarding protocol instead of the user interface."""
+        from bbs.bulletins import BulletinForwardingServer, RF_LINE_TIMEOUT
+        log.info(f"[{instance_name}] Forwarding session from neighbour "
+                 f"{remote_call}")
+        self._bus.emit(EventType.SESSION_STARTED, source=instance_name,
+                       data={"remote_call": remote_call,
+                             "session_type": "Forwarding"})
+        server = BulletinForwardingServer(self._live_config, self._store,
+                                          self._bbs, self._bus)
+        try:
+            server.serve(
+                send=lambda line: handler.send_text(line + "\r"),
+                recv=lambda: handler.recv_line(timeout=RF_LINE_TIMEOUT),
+                expected_call=neighbour.bbs_callsign,
+            )
+        except Exception as e:
+            log.error(f"[{instance_name}] Forwarding session error: {e}",
+                      exc_info=True)
+        finally:
+            time.sleep(2.0)   # let the last line go out before the DISC
+            mux.send_cmd("DISCONNECT")
             mux.release_session(handler)
             handler.set_active_session(None)
 
