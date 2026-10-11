@@ -1,5 +1,5 @@
 """
-VARA BBS - Main Entry Point
+Aether BBS - Main Entry Point
 """
 
 import sys
@@ -75,7 +75,7 @@ class BBSApplication:
         # --- Load configuration ---
         self.config = self.config_manager.load()
         setup_logging(self.config.logging)
-        log.info("VARA BBS starting up")
+        log.info("Aether BBS starting up")
         log.info(f"BBS callsign: {self.config.station.bbs_callsign}")
 
         # --- Initialise subsystems ---
@@ -372,7 +372,7 @@ def main():
     )
 
     app = QApplication(sys.argv)
-    app.setApplicationName("VARA BBS")
+    app.setApplicationName("Aether BBS")
     app.setOrganizationName("Amateur Radio")
     from core.version import get_version
     app.setApplicationVersion(get_version())
@@ -398,7 +398,7 @@ if __name__ == "__main__":
             _app = QApplication.instance()
             if _app:
                 QMessageBox.critical(
-                    None, "VARA BBS — Fatal Error",
+                    None, "Aether BBS — Fatal Error",
                     f"The application crashed at startup:\n\n{_crash}\n\n"
                     f"See crash.log for details."
                 )

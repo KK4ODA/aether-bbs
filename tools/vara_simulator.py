@@ -332,7 +332,7 @@ Examples:
 
     print()
     print("  ╔════════════════════════════════════════════╗")
-    print("  ║     VARA BBS — RF Connection Simulator     ║")
+    print("  ║     Aether BBS — RF Connection Simulator     ║")
     print("  ╚════════════════════════════════════════════╝")
 
     sim = VARASimulator(args.cmd, args.data)

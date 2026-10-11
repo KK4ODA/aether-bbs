@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         self._setup_bridge()
 
         self.setWindowTitle(
-            f"VARA BBS — {config.station.bbs_callsign}"
+            f"Aether BBS — {config.station.bbs_callsign}"
         )
         self.setMinimumSize(1024, 700)
         self.resize(1280, 860)
@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._tabs)
 
         # ── Tab 1: Dashboard ──────────────────────────────────────────
-        # VARA status + BBS status side by side (unchanged)
+        # Modem status + BBS status side by side
         self._vara_panel = VARAStatusPanel(
             self._config, self._im, self._bus,
             store=self._store, bulletin_store=self._bbs,
@@ -155,7 +155,7 @@ class MainWindow(QMainWindow):
         from PyQt6.QtWidgets import QSplitter, QVBoxLayout
         self._dashboard = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left side: VARA status + Winlink CMS stacked
+        # Left side: modem status + Winlink CMS stacked
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -280,8 +280,8 @@ class MainWindow(QMainWindow):
         b = self._bridge
         b.session_connected.connect(self._on_session_connected)
         b.session_disconnected.connect(self._on_session_disconnected)
-        b.vara_process_up.connect(lambda src: self._set_status(f"{src}: VARA running"))
-        b.vara_process_down.connect(lambda src: self._set_status(f"{src}: VARA CRASHED"))
+        b.vara_process_up.connect(lambda src: self._set_status(f"{src}: modem running"))
+        b.vara_process_down.connect(lambda src: self._set_status(f"{src}: modem CRASHED"))
         b.aprs_is_connected.connect(lambda: self._set_status("APRS-IS connected"))
         b.aprs_is_disconnected.connect(lambda: self._set_status("APRS-IS disconnected"))
 
@@ -660,11 +660,11 @@ class MainWindow(QMainWindow):
                 f"{call}" for call in self._active_sessions.values()
             )
             self.setWindowTitle(
-                f"VARA BBS — {callsign} · {n_sess} session(s): {sessions}"
+                f"Aether BBS — {callsign} · {n_sess} session(s): {sessions}"
             )
         else:
             self.setWindowTitle(
-                f"VARA BBS — {callsign} · {n_inst} instance(s)"
+                f"Aether BBS — {callsign} · {n_inst} instance(s)"
             )
 
     # ── Responsive dashboard layout ───────────────────────────────────────

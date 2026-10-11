@@ -397,9 +397,9 @@ class SMTPBackend(OutboundDeliveryBackend):
             msg["Date"] = formatdate(localtime=True)
             msg["Message-ID"] = make_msgid(
                 domain=provider.sender_email.split("@")[-1]
-                if "@" in provider.sender_email else "varabbs.local"
+                if "@" in provider.sender_email else "aetherbbs.local"
             )
-            msg["X-Mailer"] = "VARA-BBS-Delivery/1.0"
+            msg["X-Mailer"] = "Aether-BBS-Delivery/1.0"
 
             # Body
             body_raw = message.get("body", b"")

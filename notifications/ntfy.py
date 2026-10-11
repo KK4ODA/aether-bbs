@@ -70,7 +70,7 @@ class NtfyNotifier:
             log.warning("ntfy test skipped -- notifications disabled")
             return
         self._post(
-            title="VARA BBS - Test Notification",
+            title="Aether BBS - Test Notification",
             message="If you see this, ntfy push notifications are working!",
             tags=["white_check_mark", "radio"],
             priority=cfg.priority,
@@ -91,7 +91,7 @@ class NtfyNotifier:
         phrase    = d.get("alert_phrase", "Priority message received")
         tactical  = d.get("tactical_callsign", to_call)
 
-        title = f"VARA BBS Alert - {tactical}"
+        title = f"Aether BBS Alert - {tactical}"
         body_lines = [
             phrase,
             "",

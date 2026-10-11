@@ -1,4 +1,4 @@
-# notifications — push notification integrations for VARA BBS
+# notifications — push notification integrations for Aether BBS
 
 """
 notifications/__init__.py

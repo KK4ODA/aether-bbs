@@ -1,7 +1,7 @@
 """
 tests/test_security.py
 
-Comprehensive tests for the VARA BBS security hardening:
+Comprehensive tests for the Aether BBS security hardening:
   Phase 1 — Access control, roles, registration, user management
   Phase 2 — Authentication, rate limiting, mode policy, file validation
 """

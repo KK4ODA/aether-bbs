@@ -1,7 +1,7 @@
 """
 delivery/inbound.py
 
-Inbound message delivery for VARA BBS.
+Inbound message delivery for Aether BBS.
 
 Two inbound paths:
 
@@ -124,8 +124,8 @@ class InboundEmailPoller:
     are ignored.
 
     Example:
-      Email to kk4oda@varabbs.example.com → stored for KK4ODA
-      Email to w1abc@varabbs.example.com  → stored for W1ABC
+      Email to kk4oda@aetherbbs.example.com → stored for KK4ODA
+      Email to w1abc@aetherbbs.example.com  → stored for W1ABC
       Email to someone@gmail.com          → ignored (not our domain)
     """
 

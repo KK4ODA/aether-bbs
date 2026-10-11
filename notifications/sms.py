@@ -48,7 +48,7 @@ class SMSNotifier:
         if not cfg.sms_enabled:
             log.warning("SMS test skipped -- not enabled")
             return
-        self._send_sms("VARA BBS test: SMS notifications are working!")
+        self._send_sms("Aether BBS test: SMS notifications are working!")
 
     def detect_modem(self, port: str, baud: int = 9600) -> str:
         """Try to detect a modem on the given port. Returns status string."""
@@ -118,7 +118,7 @@ class SMSNotifier:
         phrase    = d.get("alert_phrase", "Priority message received")
 
         # SMS is limited to 160 chars -- keep it concise
-        parts = [f"VARA BBS: {phrase}"]
+        parts = [f"Aether BBS: {phrase}"]
         parts.append(f"From:{from_call} To:{to_call}")
         if subject:
             remaining = 160 - sum(len(p) + 1 for p in parts) - len(f"MID:{mid}")

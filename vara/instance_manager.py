@@ -1,9 +1,10 @@
 """
 vara/instance_manager.py
 
-Orchestrates all configured VARA FM instances:
+Orchestrates all configured modem instances (VARA FM/HF, Soundmodem,
+Aether HF):
   - Validates port conflicts before starting
-  - Launches VARA FM processes with staggered startup
+  - Launches modem processes with staggered startup
   - Maintains per-instance VARAFMMux objects
   - Provides unified status reporting
 """
@@ -30,7 +31,9 @@ class InstanceStatus:
         self.process_state: ProcessState = ProcessState.STOPPED
         self.mux:           Optional[VARAFMMux] = None
         self.process:       Optional[VARAFMProcess] = None
-        self.subprocess:    Optional[object] = None   # raw Popen for soundmodem
+        self.subprocess:    Optional[object] = None   # raw Popen (Soundmodem, Aether HF)
+        self.aether_client: Optional[object] = None   # AetherControlClient
+        self.aether_monitor: Optional[object] = None  # AetherMonitor
         self.bytes_tx:      int = 0
         self.bytes_rx:      int = 0
         self.sessions_total: int = 0
@@ -70,7 +73,7 @@ class VARAFMInstanceManager:
     def start_all(self):
         self._check_port_conflicts()
         enabled = list(self._instances.values())
-        log.info(f"Starting {len(enabled)} VARA FM instance(s)")
+        log.info(f"Starting {len(enabled)} modem instance(s)")
 
         for i, status in enumerate(enabled):
             self._start_instance(status)
@@ -79,7 +82,7 @@ class VARAFMInstanceManager:
                 time.sleep(STARTUP_STAGGER_SECS)
 
     def stop_all(self):
-        log.info("Stopping all VARA FM instances")
+        log.info("Stopping all modem instances")
         for status in self._instances.values():
             self._stop_instance(status)
 
@@ -126,6 +129,8 @@ class VARAFMInstanceManager:
                 or inst_cfg.data_port != old_cfg.data_port
                 or inst_cfg.executable_path != old_cfg.executable_path
                 or inst_cfg.soundmodem != old_cfg.soundmodem
+                or inst_cfg.aether != old_cfg.aether
+                or inst_cfg.host != old_cfg.host
             )
 
             # Update the stored config reference
@@ -186,7 +191,7 @@ class VARAFMInstanceManager:
             self._start_soundmodem_instance(status)
             return
 
-        # AETHER HF instances use the AETHER modem broker
+        # Aether HF: VARA-compatible host interface + control API
         if cfg.is_aether:
             self._start_aether_instance(status)
             return
@@ -245,122 +250,119 @@ class VARAFMInstanceManager:
             daemon=True,
         ).start()
 
-    def _find_aether_module(self) -> str:
-        """Locate the AETHER HF modem module.
-
-        Checks (in order):
-          1. Bundled submodule: aether_hf_modem/aether_hf/
-          2. Installed as a Python package (importable)
-
-        Returns the path to the aether_hf package directory, or "" if not found.
-        """
-        import os, importlib
-
-        # Check bundled submodule (relative to the BBS root)
-        bbs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        submodule = os.path.join(bbs_root, "aether_hf_modem", "aether_hf")
-        if os.path.isdir(submodule) and os.path.isfile(
-                os.path.join(submodule, "__init__.py")):
-            return submodule
-
-        # Check if installed as a pip package
-        try:
-            spec = importlib.util.find_spec("aether_hf")
-            if spec and spec.origin:
-                return os.path.dirname(spec.origin)
-        except (ModuleNotFoundError, ValueError):
-            pass
-
-        return ""
-
     def _start_aether_instance(self, status: InstanceStatus):
-        """Start an AETHER HF modem instance.
+        """Start an Aether HF instance.
 
-        AETHER HF exposes a VARA-compatible TCP interface, so from the
-        BBS dispatcher's perspective it behaves identically to VARA.
+        Aether HF's daemon (aetherd) answers on a VARA-compatible host
+        interface — the instance's cmd_port / data_port, 8300/8301 unless
+        changed — so BBS sessions run through the same TNCBroker as VARA HF.
+        Alongside it, the control API (aether.control_port, 8515) is polled
+        for the modem's state, faults and heard stations.
 
-        If auto_launch is True and the AETHER module is found (bundled
-        submodule or pip-installed), the modem process is started
-        automatically.  Otherwise, the BBS connects to an externally
-        running AETHER instance on the configured TCP ports.
+        With auto_start and an executable path (or an Aether HF found where
+        its installer puts it), the BBS starts Aether HF when nothing is
+        listening on the host port yet.
         """
-        import subprocess, os
+        import subprocess
+        from aether.control import AetherControlClient
+        from aether.launcher import build_command, find_aether_executable
+        from aether.monitor import AetherMonitor
+        from core.crypto import decrypt_value
+        from vara.interface import VARAFMState
+
         cfg = status.cfg
         acfg = cfg.aether
 
-        # ── Check if AETHER is available ──────────────────────────────
-        aether_path = self._find_aether_module()
-        if not aether_path:
-            log.error(
-                f"[{cfg.name}] AETHER HF modem not found. "
-                f"Initialize the git submodule:\n"
-                f"  git submodule update --init\n"
-                f"Or install via pip:\n"
-                f"  pip install aether-hf\n"
-                f"Instance will attempt to connect to an external AETHER "
-                f"process on ports {acfg.cmd_port}/{acfg.data_port}."
-            )
-            self._bus.emit(
-                EventType.VARA_PROCESS_DOWN, source=cfg.name,
-                data={"error": "AETHER HF modem not installed. "
-                      "Run: git submodule update --init"},
-            )
-        else:
-            log.info(f"[{cfg.name}] AETHER HF found at {aether_path}")
+        if status.mux is not None:
+            if status.mux.state != VARAFMState.DISCONNECTED:
+                log.info(f"[{cfg.name}] Already attached to Aether HF, skipping start")
+                return
+            status.mux.disconnect()
+            status.mux = None
+        if status.aether_monitor:
+            status.aether_monitor.stop()
+            status.aether_monitor = None
 
-        # ── Auto-launch if configured ─────────────────────────────────
-        if acfg.auto_launch and aether_path:
-            # Check if already running on the expected ports
-            if self._port_is_open(cfg.host, acfg.cmd_port):
-                log.info(
-                    f"[{cfg.name}] AETHER already running on "
-                    f"port {acfg.cmd_port} — using external instance"
+        # ── Control API client and monitor ───────────────────────────
+        token = ""
+        if acfg.control_token:
+            try:
+                token = decrypt_value(acfg.control_token,
+                                      self._config.security.machine_secret)
+            except Exception as e:
+                log.error(f"[{cfg.name}] Could not decrypt Aether control token: {e}")
+        client = AetherControlClient(cfg.host, acfg.control_port, token)
+        status.aether_client = client
+
+        # ── Auto-launch ──────────────────────────────────────────────
+        # Whether Aether is up is asked of the control API, never by opening
+        # the host port: aetherd takes one host at a time, and a probe
+        # connection could make it refuse the BBS's own attach with WRONG.
+        running = client.ping()
+        if cfg.auto_start and not running:
+            exe = cfg.executable_path or find_aether_executable()
+            if not exe:
+                log.error(
+                    f"[{cfg.name}] Aether HF is not installed (or its path is "
+                    f"not set). Install it from "
+                    f"https://github.com/KK4ODA/aether-hf/releases and set "
+                    f"the executable path in Settings → Instances."
+                )
+                self._bus.emit(
+                    EventType.VARA_PROCESS_DOWN, source=cfg.name,
+                    data={"error": "Aether HF not installed"},
                 )
             else:
-                # Launch the AETHER modem as a subprocess
-                modem_root = os.path.dirname(aether_path)
-                cmd = [
-                    "python", "-m", "aether_hf.host.vara_compat",
-                    "--cmd-port", str(acfg.cmd_port),
-                    "--data-port", str(acfg.data_port),
-                ]
-                if acfg.my_callsign:
-                    cmd.extend(["--callsign", acfg.my_callsign])
-                if acfg.mode:
-                    cmd.extend(["--mode", acfg.mode])
-
+                cmd = build_command(exe, acfg.config_file)
                 try:
-                    log.info(f"[{cfg.name}] Launching AETHER: {' '.join(cmd)}")
+                    log.info(f"[{cfg.name}] Launching Aether HF: {' '.join(cmd)}")
                     proc = subprocess.Popen(
-                        cmd, cwd=modem_root,
+                        cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
+                    status.subprocess = proc
                     status.process_state = ProcessState.RUNNING
                     self._bus.emit(
                         EventType.VARA_PROCESS_UP, source=cfg.name,
-                        data={"pid": proc.pid, "transport": "AETHER_HF"},
+                        data={"pid": proc.pid, "exe": exe,
+                              "transport": "AETHER_HF"},
                     )
-                    time.sleep(2)  # give it time to bind ports
+                    # The daemon is up within a few seconds (the desktop app
+                    # starts it after its window opens).
+                    for _ in range(30):
+                        if client.ping():
+                            break
+                        time.sleep(0.5)
+                    else:
+                        log.warning(
+                            f"[{cfg.name}] Aether HF started but its control "
+                            f"API (port {acfg.control_port}) is not answering "
+                            f"yet; the BBS will keep trying to attach."
+                        )
                 except Exception as e:
-                    log.error(f"[{cfg.name}] Failed to launch AETHER: {e}")
+                    log.error(f"[{cfg.name}] Failed to launch Aether HF: {e}")
                     self._bus.emit(
                         EventType.VARA_PROCESS_DOWN, source=cfg.name,
                         data={"error": str(e)},
                     )
+        elif running:
+            status.process_state = ProcessState.RUNNING
+            self._bus.emit(
+                EventType.VARA_PROCESS_UP, source=cfg.name,
+                data={"transport": "AETHER_HF", "external": True},
+            )
 
-        # ── Connect to AETHER's VARA-compatible TCP ports ─────────────
-        log.info(f"[{cfg.name}] Connecting to AETHER HF on "
-                 f"cmd:{acfg.cmd_port} data:{acfg.data_port}")
+        if acfg.monitor:
+            monitor = AetherMonitor(cfg.name, client, self._bus)
+            status.aether_monitor = monitor
+            monitor.start()
 
-        from copy import deepcopy
-        aether_cfg = deepcopy(cfg)
-        aether_cfg.cmd_port = acfg.cmd_port
-        aether_cfg.data_port = acfg.data_port
-
-        mux = VARAFMMux(aether_cfg, self._config, self._bus)
+        # ── Attach to the VARA-compatible host interface ─────────────
+        log.info(f"[{cfg.name}] Connecting to Aether HF host interface on "
+                 f"{cfg.host} cmd:{cfg.cmd_port} data:{cfg.data_port}")
+        mux = VARAFMMux(cfg, self._config, self._bus)
         status.mux = mux
-
         threading.Thread(
             target=mux.connect,
             name=f"AetherConnect-{cfg.name}",
@@ -439,12 +441,21 @@ class VARAFMInstanceManager:
         if status.process:
             status.process.stop()
             status.process = None
+        if status.aether_monitor:
+            status.aether_monitor.stop()
+            status.aether_monitor = None
+        if (status.aether_client and status.subprocess
+                and status.subprocess.poll() is None):
+            # An Aether HF the BBS started: let the daemon end any session on
+            # the air (its DISC and identifier) before the process goes.
+            self._shutdown_aether(cfg.name, status.aether_client)
+        status.aether_client = None
         if status.subprocess:
             try:
                 import os, subprocess as _sp
                 pid = status.subprocess.pid
                 if status.subprocess.poll() is None:
-                    log.info(f"[{cfg.name}] Terminating soundmodem PID {pid}")
+                    log.info(f"[{cfg.name}] Terminating modem process PID {pid}")
                     if os.name == "nt":
                         _sp.call(["taskkill", "/F", "/T", "/PID", str(pid)],
                                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
@@ -452,8 +463,22 @@ class VARAFMInstanceManager:
                         status.subprocess.terminate()
                     status.subprocess.wait(timeout=5)
             except Exception as e:
-                log.error(f"[{cfg.name}] Error stopping soundmodem: {e}")
+                log.error(f"[{cfg.name}] Error stopping modem process: {e}")
             status.subprocess = None
+
+    @staticmethod
+    def _shutdown_aether(name: str, client, wait_s: float = 12.0):
+        """Ask aetherd to stop via its control API and wait for it to go."""
+        from aether.control import AetherControlError
+        try:
+            client.call("shutdown")
+            log.info(f"[{name}] Asked Aether HF to shut down")
+        except AetherControlError as e:
+            log.debug(f"[{name}] Aether HF shutdown request: {e}")
+            return
+        end = time.time() + wait_s
+        while time.time() < end and client.ping():
+            time.sleep(0.5)
 
     def _on_proc_state(self, name: str, state: ProcessState):
         with self._lock:

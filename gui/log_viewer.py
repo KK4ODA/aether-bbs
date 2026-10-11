@@ -91,6 +91,7 @@ class LogViewerTab(QWidget):
         for logger_name, label in [
             ("vara.omnirig", "OmniRig"),
             ("vara.mux",     "VARA Mux"),
+            ("aether.monitor", "Aether HF status"),
             ("bbs.dispatcher", "Dispatcher"),
             ("bbs.bulletins",  "Bulletins"),
         ]:

@@ -1,8 +1,8 @@
 """
 vara/broker.py
 
-TNCBroker — owns the single VARAFMInterface for one VARA FM instance
-and arbitrates session access for the BBS dispatcher.
+TNCBroker — owns the single VARAFMInterface for one VARA FM, VARA HF or
+Aether HF instance and arbitrates session access for the BBS dispatcher.
 """
 
 import time
@@ -14,7 +14,8 @@ from typing import Optional, Protocol
 
 from core.config import InstanceConfig, AppConfig
 from core.events import EventBus, EventType
-from vara.interface import VARAFMInterfaceWithCall, VARAFMState
+from vara.interface import (VARAFMInterfaceWithCall, VARAFMState,
+                            init_bandwidth, modem_label)
 from vara.ptt import PTTController, create_ptt_driver
 from vara.rigcontrol import RigController
 
@@ -100,7 +101,9 @@ class TNCBroker:
 
         # ── PTT control for VARA HF ──────────────────────────────────
         # VARA FM handles PTT internally; VARA HF requires the app to
-        # physically key the radio when PTT ON/OFF events arrive.
+        # physically key the radio when PTT ON/OFF events arrive.  Aether HF
+        # keys the radio itself unless its keying is "host program", in
+        # which case it too expects the BBS to key on PTT ON.
         self._ptt: Optional[PTTController] = None
         if inst_cfg.is_hf and inst_cfg.ptt.method.upper() != "VOX":
             ptt_cfg = inst_cfg.ptt
@@ -127,13 +130,19 @@ class TNCBroker:
                 log.error(
                     f"[{inst_cfg.name}] PTT setup failed: {e}. "
                     f"Radio will not transmit on inbound connections! "
-                    f"Configure PTT in Settings or vara_fm_bbs.toml."
+                    f"Configure PTT in Settings or aether_bbs.toml."
                 )
+        elif inst_cfg.is_aether:
+            log.info(
+                f"[{inst_cfg.name}] Aether HF keys the radio itself "
+                f"(BBS PTT method VOX). If Aether's keying is set to "
+                f"'host program', choose a PTT method here instead."
+            )
         elif inst_cfg.is_hf:
             log.warning(
                 f"[{inst_cfg.name}] VARA HF PTT method is VOX. "
                 f"If your radio does not support VOX, configure PTT "
-                f"in Settings or vara_fm_bbs.toml."
+                f"in Settings or aether_bbs.toml."
             )
 
         # ── Rig control (frequency scanning) for VARA HF ─────────
@@ -312,8 +321,8 @@ class TNCBroker:
         self._interface.send_cmd("COMPRESSION OFF")
         time.sleep(1.0)
         # Restore HF-specific settings that may not persist between sessions
-        if getattr(self.cfg, "is_hf", False):
-            bw = getattr(self.cfg, "bandwidth", None) or 500
+        bw = init_bandwidth(self.cfg)
+        if bw:
             self._interface.send_cmd(f"BW{bw}")
             time.sleep(1.0)
         self._interface.send_cmd("LISTEN ON")
@@ -401,8 +410,8 @@ class TNCBroker:
             self._rig_control.stop()
         if self._retired:
             return
-        _mode = "HF" if getattr(self.cfg, "is_hf", False) else "FM"
-        log.warning(f"[{self.cfg.name}] VARA {_mode} TCP dropped; attempting reconnect in 5s")
+        log.warning(f"[{self.cfg.name}] {modem_label(self.cfg)} TCP dropped; "
+                    f"attempting reconnect in 5s")
         threading.Thread(
             target=self._reconnect_loop,
             name=f"Reconnect-{self.cfg.name}",
@@ -413,8 +422,7 @@ class TNCBroker:
         time.sleep(5)
         if self._retired:
             return
-        _mode = "HF" if getattr(self.cfg, "is_hf", False) else "FM"
-        log.info(f"[{self.cfg.name}] Attempting VARA {_mode} reconnect")
+        log.info(f"[{self.cfg.name}] Attempting {modem_label(self.cfg)} reconnect")
         self._interface.connect()
         if not self._retired and self._interface.state != VARAFMState.DISCONNECTED:
             self._start_data_relay()

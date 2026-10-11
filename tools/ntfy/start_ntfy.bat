@@ -1,5 +1,5 @@
 @echo off
-:: VARA BBS — Start ntfy server manually
+:: Aether BBS — Start ntfy server manually
 :: Use this if the auto-start task isn't working or you prefer manual control.
 
 set "NTFY_DIR=%~dp0"

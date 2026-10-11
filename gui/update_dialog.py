@@ -9,7 +9,7 @@ import logging
 import threading
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
-    QCheckBox, QPushButton, QProgressBar, QWidget,
+    QPushButton, QProgressBar, QWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -60,20 +60,6 @@ class UpdateDialog(QDialog):
             log_view.setMaximumHeight(180)
             layout.addWidget(log_view)
 
-        # AETHER section
-        if self._result.aether_update_available:
-            layout.addSpacing(4)
-            layout.addWidget(QLabel(
-                f"<b>AETHER HF modem: {len(self._result.aether_commits)} "
-                f"new commit(s)</b>"
-            ))
-
-        # Include AETHER checkbox
-        self._aether_cb = QCheckBox("Also update AETHER HF modem")
-        self._aether_cb.setChecked(self._result.aether_update_available)
-        self._aether_cb.setEnabled(self._result.aether_update_available)
-        layout.addWidget(self._aether_cb)
-
         layout.addSpacing(8)
 
         # Progress bar (hidden until update starts)
@@ -115,16 +101,14 @@ class UpdateDialog(QDialog):
         self._progress.show()
         self._status.setText("Pulling latest changes ...")
 
-        include_aether = self._aether_cb.isChecked()
         threading.Thread(
             target=self._do_apply,
-            args=(include_aether,),
             daemon=True,
             name="UpdateApply",
         ).start()
 
-    def _do_apply(self, include_aether: bool):
-        result = self._updater.apply_update(include_aether=include_aether)
+    def _do_apply(self):
+        result = self._updater.apply_update()
         self._apply_done.emit(result)
 
     def _on_apply_done(self, result):

@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title VARA BBS
+title Aether BBS
 
-:: -- VARA BBS Launcher ---------------------------------------------------------
-:: This script sets up the Python environment and launches the VARA BBS.
+:: -- Aether BBS Launcher ---------------------------------------------------------
+:: This script sets up the Python environment and launches the Aether BBS.
 :: Place this file in the same folder as main.py.
 :: -----------------------------------------------------------------------------
 
@@ -13,13 +13,15 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo.
-echo  ##  ##  ####  #####    ####      #####  #####   ###
-echo  ##  ## ##  ## ##  ##  ##  ##     ##  ## ##  ## ##
-echo  ##  ## ###### #####   ######     ##### ##  ##   ###
-echo   ####  ##  ## ## ##   ##  ##     ##  ## ##  ##    ##
-echo    ##   ##  ## ##  ##  ##  ##     #####  #####  ####
+echo     ###   ######  ######  ##  ##  ######  #####      #####  #####   ####
+echo    ## ##  ##        ##    ##  ##  ##      ##  ##     ##  ## ##  ## ##
+echo   ##   ## ####      ##    ######  ####    #####      #####  #####   ###
+echo   ####### ##        ##    ##  ##  ##      ## ##      ##  ## ##  ##    ##
+echo   ##   ## ######    ##    ##  ##  ######  ##  ##     #####  #####  ####
 echo.
-echo                         VARA Standalone BBS  v1.0
+set "APPVER="
+if exist VERSION set /p APPVER=<VERSION
+echo        Amateur radio BBS for VARA FM/HF, Aether HF and AX.25 packet  v!APPVER!
 echo  -------------------------------------------------------------------------------------
 echo.
 
@@ -142,7 +144,7 @@ if !MISSING!==1 (
 
 echo.
 echo  -------------------------------------------------------------------------------------
-echo  Starting VARA BBS...
+echo  Starting Aether BBS...
 echo  -------------------------------------------------------------------------------------
 echo.
 
@@ -153,7 +155,7 @@ python main.py
 if errorlevel 1 (
     echo.
     echo  -------------------------------------------------------------------------------------
-    echo  [ERROR] VARA BBS exited with an error (code %errorlevel%).
+    echo  [ERROR] Aether BBS exited with an error (code %errorlevel%).
     echo  Check the logs folder for details.
     echo  -------------------------------------------------------------------------------------
     echo.

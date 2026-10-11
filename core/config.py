@@ -40,7 +40,7 @@ class StationConfig(BaseModel):
     latitude:            float | None = None   # decimal degrees, positive = N
     longitude:           float | None = None   # decimal degrees, positive = E
     beacon_interval:     int   = Field(default=10, ge=0)   # minutes; 0 = disabled
-    beacon_text:         str   = "VARA BBS"
+    beacon_text:         str   = "Aether BBS"
     # Legacy single-callsign field — migrated to tactical_addresses on load
     home_tactical_callsign: str = Field(default="", max_length=8)
     tactical_addresses:  list[TacticalAddress] = Field(
@@ -77,7 +77,7 @@ class NotificationConfig(BaseModel):
     # ── ntfy ──────────────────────────────────────────────────────────────
     enabled:        bool = False          # master switch for ntfy
     ntfy_url:       str  = "http://127.0.0.1:8080"  # local ntfy server
-    topic:          str  = "vara-bbs"
+    topic:          str  = "aether-bbs"
     priority:       str  = Field(default="urgent",
                                   pattern="^(min|low|default|high|urgent)$")
     cloud_relay:    bool = False          # also post to cloud (ntfy.sh)
@@ -204,14 +204,34 @@ class SoundmodemConfig(BaseModel):
 
 
 class AetherConfig(BaseModel):
-    """AETHER HF modem settings."""
-    cmd_port:         int  = Field(default=8400, ge=1, le=65535)
-    data_port:        int  = Field(default=8401, ge=1, le=65535)
-    mode:             str  = Field(default="wide", pattern="^(wide|narrow|emergency)$")
-    my_callsign:      str  = ""
-    audio_device_in:  str  = ""     # sound card input device
-    audio_device_out: str  = ""     # sound card output device
-    auto_launch:      bool = True   # auto-start AETHER modem process with BBS
+    """Aether HF modem settings (transport = "AETHER_HF").
+
+    Aether HF's daemon answers on a VARA-compatible host interface, so the
+    instance's own cmd_port/data_port (default 8300/8301, the port Aether's
+    Setup step 5 calls *Host programs*) carry BBS sessions.  These settings
+    cover what is particular to Aether: its control API, which bandwidth to
+    ask for, and how to start it.
+    """
+    # Control API (JSON over HTTP) on the same host as the instance.
+    control_port:     int  = Field(default=8515, ge=1, le=65535)
+    # Bearer token — only needed when aetherd runs on another machine with a
+    # non-loopback [control] bind.  Encrypted at rest (ENC: prefix).
+    control_token:    str  = ""
+    # Poll the control API for status, faults and heard stations.
+    monitor:          bool = True
+    # Bandwidth to request with BW<n> while the BBS is attached.
+    # 0 = leave Aether on its own [radio] bandwidth (Setup step 4).
+    bandwidth:        int  = Field(default=0)
+    # Optional --config file passed when auto-starting the standalone aetherd.
+    config_file:      str  = ""
+
+    @model_validator(mode="after")
+    def _check_bandwidth(self) -> "AetherConfig":
+        if self.bandwidth not in (0, 500, 2300):
+            raise ValueError(
+                f"aether.bandwidth must be 0, 500 or 2300 (got {self.bandwidth})"
+            )
+        return self
 
 
 class InstanceConfig(BaseModel):
@@ -232,11 +252,14 @@ class InstanceConfig(BaseModel):
     default_path:     str  = ""       # AX.25 digipeater path, blank = direct
     soundcard:        str  = ""
     host:             str  = "127.0.0.1"
-    # VARA HF bandwidth setting — ignored for FM and Soundmodem instances.
+    # VARA HF bandwidth setting — ignored for FM, Soundmodem and Aether HF
+    # (Aether uses aether.bandwidth).
     # Valid values: 500, 2300, 2750 Hz.
     # None = auto-default: 500 for HF, 2300 for FM.
     bandwidth:        int | None = None
-    # PTT control — required for VARA HF, no-op for FM and Soundmodem.
+    # PTT control — required for VARA HF.  For Aether HF, only when Aether's
+    # keying is set to "host program" (Aether otherwise keys the radio itself
+    # and this stays at VOX).  No-op for FM and Soundmodem.
     ptt: PTTConfig = Field(default_factory=PTTConfig)
     # Rig control — frequency/mode setting and scanning for HF instances.
     rig_control: RigControlConfig = Field(default_factory=RigControlConfig)
@@ -263,7 +286,7 @@ class InstanceConfig(BaseModel):
         if self.mode and not self.transport:
             self.transport = f"VARA_{self.mode.upper()}"
             self.mode = ""
-        if self.transport.startswith("VARA"):
+        if self.transport.startswith("VARA") or self.transport == "AETHER_HF":
             if self.cmd_port == self.data_port:
                 raise ValueError(
                     f"cmd_port and data_port must differ (both are {self.cmd_port})"
@@ -296,7 +319,7 @@ class ForwardingConfig(BaseModel):
 
 
 class BBSConfig(BaseModel):
-    welcome_message:       str  = "Welcome to the VARA BBS. Type H for help."
+    welcome_message:       str  = "Welcome to the Aether BBS. Type H for help."
     show_connect_banner:   bool = True  # ASCII art shown to RF users on connect
     session_timeout:       int  = Field(default=600, ge=30)   # seconds
     message_dir:           str  = "messages"
@@ -383,7 +406,6 @@ class SecurityConfig(BaseModel):
 class UpdaterConfig(BaseModel):
     """Software auto-update settings (git-based)."""
     check_on_startup:           bool = True
-    include_aether:             bool = False   # also update AETHER HF submodule
     auto_check_interval_hours:  int  = Field(default=0, ge=0, le=168)  # 0 = startup only
     branch:                     str  = "master"
 
@@ -442,19 +464,51 @@ def _get_delivery_config_class():
 
 # ── Config path resolution ────────────────────────────────────────────────────
 
+APP_NAME          = "Aether BBS"
+CONFIG_DIR_NAME   = "aether-bbs"
+CONFIG_FILE_NAME  = "aether_bbs.toml"
+# Names used before the rebrand from VARA BBS — read once and migrated.
+LEGACY_CONFIG_DIR_NAME  = "vara-fm-bbs"
+LEGACY_CONFIG_FILE_NAME = "vara_fm_bbs.toml"
+
+
+def _config_base() -> Path:
+    if sys.platform == "win32":
+        return Path.home() / "AppData" / "Roaming"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path.home() / ".config"
+
+
 def get_config_dir() -> Path:
     """Return OS-appropriate config directory."""
-    if sys.platform == "win32":
-        base = Path.home() / "AppData" / "Roaming"
-    elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    else:
-        base = Path.home() / ".config"
-    return base / "vara-fm-bbs"
+    return _config_base() / CONFIG_DIR_NAME
 
 
 def get_config_path() -> Path:
-    return get_config_dir() / "vara_fm_bbs.toml"
+    return get_config_dir() / CONFIG_FILE_NAME
+
+
+def get_legacy_config_path() -> Path:
+    return _config_base() / LEGACY_CONFIG_DIR_NAME / LEGACY_CONFIG_FILE_NAME
+
+
+def migrate_legacy_config(new_path: Path, legacy_path: Path) -> bool:
+    """Copy a VARA BBS config to the Aether BBS location on first run.
+
+    The old file is left where it is, so going back to an older version
+    still finds its settings.  Returns True when a copy was made.
+    """
+    if new_path.exists() or not legacy_path.exists():
+        return False
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_path, new_path)
+        log.info(f"Migrated configuration from {legacy_path} to {new_path}")
+        return True
+    except OSError as e:
+        log.warning(f"Could not migrate legacy config {legacy_path}: {e}")
+        return False
 
 
 # ── ConfigManager ─────────────────────────────────────────────────────────────
@@ -465,6 +519,8 @@ class ConfigManager:
     def __init__(self, path: Optional[Path] = None):
         self._path = path or get_config_path()
         self._config: Optional[AppConfig] = None
+        if path is None:
+            migrate_legacy_config(self._path, get_legacy_config_path())
 
     @property
     def path(self) -> Path:
@@ -474,7 +530,10 @@ class ConfigManager:
         """Load config, creating defaults if missing, recovering if corrupt."""
         if not self._path.exists():
             log.info(f"No config found at {self._path}; writing defaults")
-            cfg = AppConfig()
+            # Run the migrations so the first file already carries a
+            # machine_secret — secrets saved before it exists could not be
+            # decrypted once one is generated.
+            cfg, _ = self._migrate(AppConfig())
             self.save(cfg)
             self._config = cfg
             return cfg
@@ -516,6 +575,28 @@ class ConfigManager:
                 mode = inst.pop("mode", "FM").upper()
                 inst["transport"] = f"VARA_{mode}" if mode in ("FM", "HF") else "VARA_FM"
 
+        # Aether HF: the prototype-era settings are gone.  Its host ports
+        # now live on the instance (cmd_port/data_port), like VARA's.
+        for inst in raw.get("instances", []):
+            if not isinstance(inst, dict):
+                continue
+            ae = inst.get("aether")
+            if not isinstance(ae, dict):
+                continue
+            old_cmd = ae.pop("cmd_port", None)
+            ae.pop("data_port", None)
+            for k in ("mode", "my_callsign", "audio_device_in",
+                      "audio_device_out", "auto_launch"):
+                ae.pop(k, None)
+            if (inst.get("transport") == "AETHER_HF" and old_cmd
+                    and "cmd_port" not in inst):
+                inst["cmd_port"] = old_cmd
+                inst["data_port"] = old_cmd + 1
+
+        upd = raw.get("updater")
+        if isinstance(upd, dict):
+            upd.pop("include_aether", None)
+
         return raw
 
     def _migrate(self, cfg: AppConfig) -> tuple[AppConfig, bool]:
@@ -537,10 +618,25 @@ class ConfigManager:
         # Fix beacon_text accidentally set to "BBS OFFLINE" (offline beacon text).
         bt = data.get("station", {}).get("beacon_text", "")
         if bt.strip().upper() == "BBS OFFLINE":
-            log.info("Migrating beacon_text \"BBS OFFLINE\" → \"VARA BBS\"")
-            data.setdefault("station", {})["beacon_text"] = "VARA BBS"
+            log.info("Migrating beacon_text \"BBS OFFLINE\" → \"Aether BBS\"")
+            data.setdefault("station", {})["beacon_text"] = "Aether BBS"
             cfg = AppConfig.model_validate(data)
             changed = True
+
+        # Rebrand: settings still at the VARA BBS defaults take the new name.
+        # Anything the sysop wrote themselves is left alone, and so is the
+        # ntfy topic (phones are subscribed to it by name).
+        for section, key, old, new in (
+            ("station", "beacon_text", "VARA BBS", "Aether BBS"),
+            ("bbs", "welcome_message",
+             "Welcome to the VARA BBS. Type H for help.",
+             "Welcome to the Aether BBS. Type H for help."),
+        ):
+            if data.get(section, {}).get(key) == old:
+                log.info(f'Migrating {section}.{key} "{old}" → "{new}"')
+                data[section][key] = new
+                cfg = AppConfig.model_validate(data)
+                changed = True
 
         # Migrate file_upload: if blocked_callsigns exist but permission_mode
         # is absent (pre-whitelist config), default to "blocklist" to preserve
@@ -576,6 +672,17 @@ class ConfigManager:
             changed = True
             log.info("Encrypted Winlink gateway_password at rest")
 
+        # Encrypt Aether HF control tokens at rest
+        if machine:
+            for inst in data.get("instances", []):
+                ae = inst.get("aether") or {}
+                tok = ae.get("control_token", "")
+                if tok and not tok.startswith(ENC_PREFIX):
+                    ae["control_token"] = encrypt_value(tok, machine)
+                    cfg = AppConfig.model_validate(data)
+                    changed = True
+                    log.info(f"Encrypted Aether HF control token for {inst.get('name', '?')}")
+
         # Encrypt tactical address Winlink passwords at rest
         if machine:
             for ta in data.get("station", {}).get("tactical_addresses", []):
@@ -593,7 +700,8 @@ class ConfigManager:
         """Atomically write config to TOML."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".toml.tmp")
-        data = cfg.model_dump()
+        # TOML has no null: unset optional fields (e.g. latitude) are omitted
+        data = cfg.model_dump(exclude_none=True)
         # pydantic nested models → plain dicts; tomli_w handles the rest
         tmp.write_bytes(tomli_w.dumps(data).encode("utf-8"))
         tmp.replace(self._path)

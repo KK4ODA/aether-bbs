@@ -1,7 +1,7 @@
 """
 bbs/bulletins.py
 
-Bulletin board support for the VARA FM BBS.
+Bulletin board support for the Aether BBS.
 
 Bulletins are messages addressed to a group name (ALL, WX, DX, LOCAL, etc.)
 rather than a specific callsign. Any station connecting to the BBS can read

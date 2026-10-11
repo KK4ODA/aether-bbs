@@ -17,14 +17,14 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QStackedWidget, QSplitter,
     QAbstractItemView, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QFont
 
 from core.config import (AppConfig, ConfigManager, InstanceConfig, PTTConfig,
                           RigControlConfig, ScanChannelConfig, SoundmodemConfig,
                           BulletinAreaConfig, ForwardingNeighbourConfig,
                           ForwardingConfig, TacticalAddress, WinlinkConfig,
-                          NotificationConfig)
+                          NotificationConfig, AetherConfig)
 from core.events import EventBus, EventType
 
 log = logging.getLogger(__name__)
@@ -245,7 +245,7 @@ class ScanChannelDialog(QDialog):
             "Frequencies in kHz (e.g. 7122.0). "
             "Hours in UTC 'HH-HH' format (e.g. '14-04' for daytime, "
             "'00-24' for always).\n"
-            "Scanning pauses when a VARA session connects and "
+            "Scanning pauses when a modem session connects and "
             "resumes when it disconnects."
         )
         help_lbl.setWordWrap(True)
@@ -562,7 +562,7 @@ class SettingsTab(QScrollArea):
         self._beacon_txt= QLineEdit(cfg.beacon_text)
         self._beacon_txt.setToolTip(
             "Custom text appended to APRS beacon packets.\n"
-            "e.g. 'VARA BBS 145.530 MHz'"
+            "e.g. 'Aether BBS 145.530 MHz'"
         )
 
         form.addRow("BBS Callsign:",    self._bbs_call)
@@ -624,7 +624,7 @@ class SettingsTab(QScrollArea):
         loc_note.setStyleSheet("color:#888; font-size:9pt;")
         outer.addWidget(loc_note)
 
-        note = QLabel("⚠ Changing BBS callsign requires VARA restart")
+        note = QLabel("⚠ Changing BBS callsign requires a modem restart")
         note.setStyleSheet("color:orange;")
         outer.addWidget(note)
 
@@ -639,7 +639,8 @@ class SettingsTab(QScrollArea):
         layout.setSpacing(6)
 
         note = QLabel(
-            "Each entry defines one VARA instance. "
+            "Each entry defines one modem instance (VARA FM, VARA HF, "
+            "Soundmodem or Aether HF). "
             "Select an instance on the left to edit its settings. "
             "Port numbers must be unique."
         )
@@ -667,6 +668,8 @@ class SettingsTab(QScrollArea):
                 "ptt":              getattr(cfg, "ptt", PTTConfig()),
                 "rig_control":      getattr(cfg, "rig_control", RigControlConfig()),
                 "soundmodem":       getattr(cfg, "soundmodem", SoundmodemConfig()),
+                "aether":           self._aether_for_edit(cfg),
+                "host":             getattr(cfg, "host", "127.0.0.1"),
                 "auto_start":       cfg.auto_start,
                 "enabled":          cfg.enabled,
             })
@@ -748,7 +751,7 @@ class SettingsTab(QScrollArea):
             "VARA_FM — VHF/UHF via VARA FM modem\n"
             "VARA_HF — HF via VARA HF modem (needs PTT control)\n"
             "SOUNDMODEM — AX.25 packet via Soundmodem/Direwolf (AGWPE)\n"
-            "AETHER_HF — HF via AETHER modem (experimental)"
+            "AETHER_HF — HF via the Aether HF modem (open source, beta)"
         )
         self._inst_mode.currentTextChanged.connect(self._on_inst_mode_changed)
         id_form.addRow("Transport:", self._inst_mode)
@@ -765,7 +768,9 @@ class SettingsTab(QScrollArea):
         self._inst_enabled = QCheckBox("Enabled")
         self._inst_enabled.setToolTip("Enable or disable this instance.\nDisabled instances are not started.")
         self._inst_auto_start = QCheckBox("Auto Start")
-        self._inst_auto_start.setToolTip("Automatically launch the modem executable\nwhen the BBS starts.")
+        self._inst_auto_start.setToolTip(
+            "Automatically launch the modem executable\nwhen the BBS starts "
+            "(skipped when the modem is already running).")
         self._inst_enabled.stateChanged.connect(self._on_inst_field_changed)
         self._inst_auto_start.stateChanged.connect(self._on_inst_field_changed)
         chk_row.addWidget(self._inst_enabled)
@@ -776,7 +781,7 @@ class SettingsTab(QScrollArea):
         dl.addWidget(id_group)
 
         # ── VARA Modem group ──────────────────────────────────────
-        self._inst_vara_group = QGroupBox("VARA Modem")
+        self._inst_vara_group = QGroupBox("Modem")
         vara_group = self._inst_vara_group
         vara_form = QFormLayout(vara_group)
         vara_form.setFieldGrowthPolicy(
@@ -787,7 +792,10 @@ class SettingsTab(QScrollArea):
         exe_lay = QHBoxLayout(exe_widget)
         exe_lay.setContentsMargins(0, 0, 0, 0)
         self._inst_exe = QLineEdit()
-        self._inst_exe.setToolTip("Full path to the VARA modem executable\n(e.g. C:\\VARA FM\\VARAFM.exe).")
+        self._inst_exe.setToolTip(
+            "Full path to the modem executable\n"
+            "(e.g. C:\\VARA FM\\VARAFM.exe, or for Aether HF\n"
+            "%LOCALAPPDATA%\\Aether HF\\aether-hf.exe).")
         self._inst_exe.textChanged.connect(self._on_inst_field_changed)
         browse_btn = QPushButton("Browse…")
         browse_btn.setFixedWidth(70)
@@ -798,7 +806,10 @@ class SettingsTab(QScrollArea):
 
         self._inst_cmd_port = QSpinBox()
         self._inst_cmd_port.setRange(1024, 65534)
-        self._inst_cmd_port.setToolTip("TCP port for VARA command/control channel.\nDefault: 8300.")
+        self._inst_cmd_port.setToolTip(
+            "TCP port for the VARA command/control channel.\nDefault: 8300.\n"
+            "For Aether HF this is the 'Host programs' port\n"
+            "in Aether's Setup (step 5).")
         self._inst_cmd_port.valueChanged.connect(self._on_inst_field_changed)
         self._inst_cmd_port.valueChanged.connect(
             lambda v: self._inst_data_port.setValue(v + 1))
@@ -822,9 +833,96 @@ class SettingsTab(QScrollArea):
         self._inst_bw.addItems(["500", "2300", "2750"])
         self._inst_bw.setToolTip("VARA HF bandwidth (Hz). Ignored for FM.")
         self._inst_bw.currentTextChanged.connect(self._on_inst_field_changed)
-        vara_form.addRow("Bandwidth (Hz):", self._inst_bw)
+        self._inst_bw_label = QLabel("Bandwidth (Hz):")
+        vara_form.addRow(self._inst_bw_label, self._inst_bw)
 
         dl.addWidget(vara_group)
+
+        # ── Aether HF group ──────────────────────────────────────
+        self._inst_aether_group = QGroupBox("Aether HF")
+        ae_form = QFormLayout(self._inst_aether_group)
+        ae_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+
+        ae_note = QLabel(
+            "Aether HF is set up in its own window (callsign rules, radio, "
+            "keying, sound card). Turn on <b>Host programs</b> in its Setup "
+            "(step 5) with the CMD port above. The BBS sets MYCALL and "
+            "answers calls while attached."
+        )
+        ae_note.setWordWrap(True)
+        ae_note.setStyleSheet("color:#80848e; font-size:9pt;")
+        ae_form.addRow(ae_note)
+
+        self._inst_ae_bw = QComboBox()
+        self._inst_ae_bw.addItems(["Aether's own setting", "500", "2300"])
+        self._inst_ae_bw.setToolTip(
+            "Bandwidth the BBS asks for (BW command) while attached.\n"
+            "Aether's own setting: leave Aether on Setup step 4's bandwidth.\n"
+            "A 2300 Hz station still answers a 500 Hz call at 500 Hz."
+        )
+        self._inst_ae_bw.currentTextChanged.connect(self._on_inst_field_changed)
+        ae_form.addRow("Bandwidth (Hz):", self._inst_ae_bw)
+
+        self._inst_ae_ctl_port = QSpinBox()
+        self._inst_ae_ctl_port.setRange(1, 65535)
+        self._inst_ae_ctl_port.setValue(8515)
+        self._inst_ae_ctl_port.setToolTip(
+            "Aether HF control API port ([control] in station.toml).\n"
+            "Default: 8515. Used for status, faults and heard stations."
+        )
+        self._inst_ae_ctl_port.valueChanged.connect(self._on_inst_field_changed)
+        ae_form.addRow("Control API port:", self._inst_ae_ctl_port)
+
+        self._inst_ae_token = QLineEdit()
+        self._inst_ae_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self._inst_ae_token.setPlaceholderText("not needed on this computer")
+        self._inst_ae_token.setToolTip(
+            "Control API token — only for an Aether HF on another computer\n"
+            "whose [control] bind is not loopback. Stored encrypted."
+        )
+        self._inst_ae_token.textChanged.connect(self._on_inst_field_changed)
+        ae_form.addRow("Control token:", self._inst_ae_token)
+
+        self._inst_ae_monitor = QCheckBox("Show Aether HF status on the dashboard")
+        self._inst_ae_monitor.setToolTip(
+            "Poll the control API for the modem's state, bandwidth, SNR,\n"
+            "faults and the stations it has heard (added to MHeard)."
+        )
+        self._inst_ae_monitor.toggled.connect(self._on_inst_field_changed)
+        ae_form.addRow(self._inst_ae_monitor)
+
+        self._inst_ae_config = QLineEdit()
+        self._inst_ae_config.setPlaceholderText("optional — standalone aetherd only")
+        self._inst_ae_config.setToolTip(
+            "Passed as --config when Auto Start launches the standalone\n"
+            "aetherd daemon. The desktop app uses its own station.toml."
+        )
+        self._inst_ae_config.textChanged.connect(self._on_inst_field_changed)
+        ae_form.addRow("aetherd config:", self._inst_ae_config)
+
+        ae_btn_widget = QWidget()
+        ae_btn_row = QHBoxLayout(ae_btn_widget)
+        ae_btn_row.setContentsMargins(0, 0, 0, 0)
+        ae_find_btn = QPushButton("Find installed")
+        ae_find_btn.setToolTip("Look for Aether HF where its installer puts it")
+        ae_find_btn.clicked.connect(self._find_aether_exe)
+        ae_test_btn = QPushButton("Test connection")
+        ae_test_btn.setToolTip("Ask Aether HF's control API for its status")
+        ae_test_btn.clicked.connect(self._test_aether)
+        ae_btn_row.addWidget(ae_find_btn)
+        ae_btn_row.addWidget(ae_test_btn)
+        ae_btn_row.addStretch()
+        ae_form.addRow("", ae_btn_widget)
+
+        self._ae_test_label = QLabel("")
+        self._ae_test_label.setWordWrap(True)
+        self._ae_test_label.setStyleSheet("color:#80848e;")
+        ae_form.addRow("", self._ae_test_label)
+
+        self._inst_aether_group.setVisible(False)
+        dl.addWidget(self._inst_aether_group)
 
         # ── Soundmodem (AGWPE) group ─────────────────────────────
         self._inst_soundmodem_group = QGroupBox("Soundmodem (AGWPE)")
@@ -1003,6 +1101,15 @@ class SettingsTab(QScrollArea):
             "auto_launch": self._inst_sm_auto_launch.isChecked(),
             "exe_path": self._inst_sm_exe.text().strip(),
         })
+        # Aether HF settings
+        ae_bw = self._inst_ae_bw.currentText()
+        d["aether"] = d.get("aether", AetherConfig()).model_copy(update={
+            "bandwidth": int(ae_bw) if ae_bw.isdigit() else 0,
+            "control_port": self._inst_ae_ctl_port.value(),
+            "control_token": self._inst_ae_token.text().strip(),
+            "monitor": self._inst_ae_monitor.isChecked(),
+            "config_file": self._inst_ae_config.text().strip(),
+        })
         # PTT method from combo; rest of PTTConfig preserved from dialog
         ptt = d["ptt"]
         d["ptt"] = ptt.model_copy(
@@ -1055,6 +1162,16 @@ class SettingsTab(QScrollArea):
         self._inst_sm_auto_launch.setChecked(getattr(sm, "auto_launch", False))
         self._inst_sm_exe.setText(getattr(sm, "exe_path", ""))
 
+        # Aether HF settings
+        ae = d.get("aether", AetherConfig())
+        self._inst_ae_bw.setCurrentText(
+            str(ae.bandwidth) if ae.bandwidth else "Aether's own setting")
+        self._inst_ae_ctl_port.setValue(ae.control_port)
+        self._inst_ae_token.setText(ae.control_token)
+        self._inst_ae_monitor.setChecked(ae.monitor)
+        self._inst_ae_config.setText(ae.config_file)
+        self._ae_test_label.setText("")
+
         self._inst_auto_start.setChecked(d.get("auto_start", False))
         self._inst_enabled.setChecked(d.get("enabled", True))
 
@@ -1098,13 +1215,27 @@ class SettingsTab(QScrollArea):
         """Show/hide groups based on transport type."""
         transport = self._inst_mode.currentText().upper()
         is_hf = transport in ("VARA_HF", "AETHER_HF")
+        is_aether = transport == "AETHER_HF"
         is_soundmodem = transport == "SOUNDMODEM"
         self._inst_ptt_group.setVisible(is_hf)
         self._inst_rig_group.setVisible(is_hf)
         self._inst_vara_group.setVisible(not is_soundmodem)
         self._inst_soundmodem_group.setVisible(is_soundmodem)
+        self._inst_aether_group.setVisible(is_aether)
+        # Aether's bandwidth is chosen in its own group
+        self._inst_bw.setVisible(not is_aether)
+        self._inst_bw_label.setVisible(not is_aether)
+        self._inst_vara_group.setTitle(
+            "Aether HF host interface (VARA-compatible)" if is_aether
+            else "VARA Modem")
+        self._inst_ptt_group.setTitle(
+            "PTT Control  (only when Aether's keying is 'host program')"
+            if is_aether else "PTT Control  (HF only)")
         if not is_hf:
             self._inst_ptt_method.setCurrentText("VOX")
+        if (is_aether and not self._inst_loading
+                and not self._inst_exe.text().strip()):
+            self._find_aether_exe(quiet=True)
 
     # ── Generic field change handler ──────────────────────────────────────
 
@@ -1161,6 +1292,7 @@ class SettingsTab(QScrollArea):
             "ptt":              PTTConfig(),
             "rig_control":      RigControlConfig(),
             "soundmodem":       SoundmodemConfig(),
+            "aether":           AetherConfig(),
             "auto_start":       False,
             "enabled":          True,
         }
@@ -1267,11 +1399,84 @@ class SettingsTab(QScrollArea):
 
     def _browse_exe(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select VARA Executable",
+            self, "Select Modem Executable",
             filter="Executables (*.exe);;All files (*)"
         )
         if path:
             self._inst_exe.setText(path)
+
+    # ── Aether HF helpers ─────────────────────────────────────────────────
+
+    def _aether_for_edit(self, cfg) -> AetherConfig:
+        """The instance's AetherConfig with its control token decrypted."""
+        ae = getattr(cfg, "aether", None) or AetherConfig()
+        if ae.control_token:
+            from core.crypto import decrypt_value
+            try:
+                plain = decrypt_value(ae.control_token,
+                                      self._config.security.machine_secret)
+            except Exception:
+                plain = ""
+            ae = ae.model_copy(update={"control_token": plain})
+        return ae
+
+    def _find_aether_exe(self, quiet: bool = False):
+        from aether.launcher import find_aether_executable
+        path = find_aether_executable()
+        if path:
+            self._inst_exe.setText(path)
+            self._ae_test_label.setText(f"Found {path}")
+            self._ae_test_label.setStyleSheet("color:#2ECC71;")
+        elif not quiet:
+            self._ae_test_label.setText(
+                "Aether HF not found. Install it from "
+                "github.com/KK4ODA/aether-hf/releases, or Browse… to it."
+            )
+            self._ae_test_label.setStyleSheet("color:orange;")
+
+    def _test_aether(self):
+        import threading
+        from aether.control import AetherControlClient, AetherControlError
+        from aether.monitor import problems, summarize_status
+        from PyQt6.QtCore import QMetaObject, Q_ARG
+
+        host = "127.0.0.1"
+        idx = self._inst_selected
+        if 0 <= idx < len(self._inst_data):
+            host = self._inst_data[idx].get("host", "127.0.0.1") or "127.0.0.1"
+        client = AetherControlClient(
+            host, self._inst_ae_ctl_port.value(),
+            self._inst_ae_token.text().strip(),
+        )
+        self._ae_test_label.setText("Asking Aether HF…")
+        self._ae_test_label.setStyleSheet("color:#80848e;")
+
+        def _work():
+            try:
+                sm = summarize_status(client.status())
+            except AetherControlError as e:
+                text, ok = f"✗ {e}", False
+            else:
+                lines = [
+                    f"✓ Aether HF {sm.get('version') or ''} — "
+                    f"{sm.get('callsign') or '?'}, "
+                    f"{sm.get('bandwidth_hz') or '?'} Hz, {sm.get('state') or '?'}"
+                ]
+                lines += [f"⚠ {p}" for p in problems(sm)]
+                text, ok = "\n".join(lines), len(lines) == 1
+            QMetaObject.invokeMethod(
+                self, "_show_aether_test",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, text), Q_ARG(bool, ok),
+            )
+
+        threading.Thread(target=_work, daemon=True, name="AetherTest").start()
+
+    @pyqtSlot(str, bool)
+    def _show_aether_test(self, text: str, ok: bool):
+        self._ae_test_label.setText(text)
+        self._ae_test_label.setStyleSheet(
+            "color:#2ECC71;" if ok else "color:orange;")
 
     # ── Port validation (across all instances) ────────────────────────────
 
@@ -1633,7 +1838,7 @@ class SettingsTab(QScrollArea):
         ntfy_form.addRow("Server URL:", self._ntfy_url)
 
         self._ntfy_topic = QLineEdit(cfg.topic)
-        self._ntfy_topic.setPlaceholderText("vara-bbs")
+        self._ntfy_topic.setPlaceholderText("aether-bbs")
         self._ntfy_topic.setToolTip("ntfy topic name for notifications")
         ntfy_form.addRow("Topic:", self._ntfy_topic)
 
@@ -1946,7 +2151,7 @@ class SettingsTab(QScrollArea):
         ncfg = NotificationConfig(
             enabled=self._ntfy_en.isChecked(),
             ntfy_url=self._ntfy_url.text().strip() or "http://127.0.0.1:8080",
-            topic=self._ntfy_topic.text().strip() or "vara-bbs",
+            topic=self._ntfy_topic.text().strip() or "aether-bbs",
             priority=self._ntfy_priority.currentText(),
             cloud_relay=self._ntfy_cloud.isChecked(),
             cloud_url=self._ntfy_cloud_url.text().strip() or "https://ntfy.sh",
@@ -2723,6 +2928,16 @@ class SettingsTab(QScrollArea):
 
         return w
 
+    def _aether_for_save(self, ae: AetherConfig) -> AetherConfig:
+        """Encrypt the control token before it is written to the config."""
+        machine = self._config.security.machine_secret
+        if (ae.control_token and machine
+                and not ae.control_token.startswith("ENC:")):
+            from core.crypto import encrypt_value
+            ae = ae.model_copy(update={"control_token": encrypt_value(
+                ae.control_token, machine)})
+        return ae
+
     def _encrypt_winlink_password(self, plaintext: str) -> str:
         """Encrypt a Winlink password for storage in the config file."""
         from core.crypto import encrypt_value
@@ -3028,16 +3243,6 @@ class SettingsTab(QScrollArea):
         self._upd_check_startup.setChecked(cfg.check_on_startup)
         form.addRow("", self._upd_check_startup)
 
-        self._upd_include_aether = QCheckBox(
-            "Include AETHER HF modem in update checks"
-        )
-        self._upd_include_aether.setChecked(cfg.include_aether)
-        self._upd_include_aether.setToolTip(
-            "When enabled, the updater will also pull the latest\n"
-            "AETHER HF modem code from its git repository.\n"
-            "Leave off if AETHER is under active local development."
-        )
-        form.addRow("", self._upd_include_aether)
 
         self._upd_interval = QSpinBox()
         self._upd_interval.setRange(0, 168)
@@ -3147,6 +3352,8 @@ class SettingsTab(QScrollArea):
                 ptt=d.get("ptt", PTTConfig()),
                 rig_control=d.get("rig_control", RigControlConfig()),
                 soundmodem=d.get("soundmodem", SoundmodemConfig()),
+                aether=self._aether_for_save(d.get("aether", AetherConfig())),
+                host=d.get("host", "127.0.0.1"),
                 auto_start=d.get("auto_start", False),
                 enabled=d.get("enabled", True),
             ))
@@ -3309,7 +3516,7 @@ class SettingsTab(QScrollArea):
             notifications=NotificationConfig(
                 enabled=self._ntfy_en.isChecked(),
                 ntfy_url=self._ntfy_url.text().strip() or "http://127.0.0.1:8080",
-                topic=self._ntfy_topic.text().strip() or "vara-bbs",
+                topic=self._ntfy_topic.text().strip() or "aether-bbs",
                 priority=self._ntfy_priority.currentText(),
                 cloud_relay=self._ntfy_cloud.isChecked(),
                 cloud_url=self._ntfy_cloud_url.text().strip() or "https://ntfy.sh",
@@ -3349,7 +3556,6 @@ class SettingsTab(QScrollArea):
             ),
             updater=UpdaterConfig(
                 check_on_startup=self._upd_check_startup.isChecked(),
-                include_aether=self._upd_include_aether.isChecked(),
                 auto_check_interval_hours=self._upd_interval.value(),
                 branch=self._config.updater.branch,
             ),

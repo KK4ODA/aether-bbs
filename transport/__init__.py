@@ -1,7 +1,7 @@
 """
 transport/
 
-Transport abstraction layer for the VARA BBS.
+Transport abstraction layer for the Aether BBS.
 
 Supports multiple modem backends (VARA FM/HF, Soundmodem via AGWPE/KISS)
 through a common broker protocol.  Each instance is configured with one

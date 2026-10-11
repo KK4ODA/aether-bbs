@@ -1,11 +1,13 @@
 """
 gui/vara_panel.py
 
-VARA Status Panel (FM and HF instances).
+Modem Status Panel (VARA FM/HF, Soundmodem and Aether HF instances).
 Displays one status card per configured instance showing:
-  process state, TCP state, PTT, BUSY, current session, traffic.
+  process state, TCP state, PTT, BUSY, current session, traffic, link
+  quality (SN / BITRATE), and for Aether HF the modem's own status.
 """
 
+import json
 import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
@@ -35,7 +37,7 @@ def _indicator(color: str, size: int = 14) -> QLabel:
 
 
 class InstanceCard(QGroupBox):
-    """One status card for one VARA FM or HF instance."""
+    """One status card for one modem instance."""
 
     def __init__(self, instance_name: str, im: VARAFMInstanceManager,
                  inst_cfg=None, parent=None):
@@ -90,10 +92,9 @@ class InstanceCard(QGroupBox):
         self._tcp_ind    = _indicator(STATE_COLORS["disconnected"])
         self._ptt_ind    = _indicator(STATE_COLORS["stopped"])
         self._ptt_ind.setToolTip(
-            "PTT — controlled entirely by VARA.\n"
-            "Lights red when VARA keys the transmitter.\n"
-            "PTT method (VOX, CAT, RTS/DTR, CM108) is configured\n"
-            "inside VARA Settings, not in this application."
+            "PTT — lights red when the modem keys the transmitter.\n"
+            "VARA FM and Aether HF key the radio themselves (set up in\n"
+            "the modem); VARA HF is keyed by the PTT method set here."
         )
         self._busy_ind   = _indicator(STATE_COLORS["stopped"])
 
@@ -121,6 +122,26 @@ class InstanceCard(QGroupBox):
         self._traffic_lbl.setStyleSheet("color:#888;font-size:9pt;")
         layout.addWidget(self._traffic_lbl)
 
+        # Link quality (SN / BITRATE lines from the modem)
+        self._snr = None
+        self._bps = None
+        self._link_lbl = QLabel("")
+        self._link_lbl.setStyleSheet("color:#888;font-size:9pt;")
+        self._link_lbl.setVisible(False)
+        layout.addWidget(self._link_lbl)
+
+        # Aether HF: the modem's own status, from its control API
+        self._aether_lbl = QLabel("")
+        self._aether_lbl.setWordWrap(True)
+        self._aether_lbl.setStyleSheet("color:#b9a6ff;font-size:9pt;")
+        self._aether_problems = QLabel("")
+        self._aether_problems.setWordWrap(True)
+        self._aether_problems.setStyleSheet("color:#f0b232;font-size:9pt;")
+        self._aether_lbl.setVisible(False)
+        self._aether_problems.setVisible(False)
+        layout.addWidget(self._aether_lbl)
+        layout.addWidget(self._aether_problems)
+
         # Control buttons
         btn_layout = QHBoxLayout()
         self._btn_start   = QPushButton("Start")
@@ -129,9 +150,9 @@ class InstanceCard(QGroupBox):
         self._btn_abort   = QPushButton("ABORT")
         self._btn_abort.setStyleSheet("color:red;font-weight:bold;")
         self._btn_abort.setToolTip(
-            "Forcefully kill the VARA process for this instance.\n"
-            "Use only if VARA is unresponsive — a normal Stop\n"
-            "is preferred for graceful shutdown."
+            "Send ABORT to the modem: ends the current RF session or\n"
+            "call at once, without an orderly disconnect.\n"
+            "A normal Stop is preferred."
         )
 
         self._btn_start.clicked.connect(lambda: self._im.start_instance(self._name))
@@ -190,12 +211,61 @@ class InstanceCard(QGroupBox):
     def on_session_disconnected(self):
         self._session_lbl.setText("No active session")
         self._session_lbl.setStyleSheet("")
+        self._bps = None
 
     @pyqtSlot(int)
     def on_buffer(self, n: int):
         self._traffic_lbl.setText(
             f"TX: {self._bytes_tx} B   RX: {self._bytes_rx} B   BUF: {n}"
         )
+
+    @pyqtSlot(float, int, int)
+    def on_link_quality(self, snr: float, level: int, bps: int):
+        """SN / BITRATE from the modem (NaN / -1 for 'not in this update')."""
+        if snr == snr:          # not NaN
+            self._snr = snr
+        if bps >= 0:
+            self._bps = (level, bps)
+        parts = []
+        if self._snr is not None:
+            parts.append(f"SNR {self._snr:+.0f} dB")
+        if self._bps:
+            parts.append(f"level {self._bps[0]} · {self._bps[1]} bps")
+        self._link_lbl.setText("Link: " + "   ".join(parts))
+        self._link_lbl.setVisible(bool(parts))
+
+    @pyqtSlot(str)
+    def on_aether_status(self, payload: str):
+        try:
+            st = json.loads(payload)
+        except ValueError:
+            return
+        self._aether_lbl.setVisible(True)
+        if not st.get("reachable"):
+            self._aether_lbl.setText("Aether HF: control API not reachable")
+            self._aether_lbl.setToolTip(st.get("error", ""))
+            self._aether_problems.setVisible(False)
+            return
+        bits = [f"Aether HF {st.get('version') or ''}".strip()]
+        if st.get("callsign"):
+            bits.append(st["callsign"])
+        if st.get("bandwidth_hz"):
+            bits.append(f"{st['bandwidth_hz']} Hz")
+        if st.get("frequency_hz"):
+            bits.append(f"{st['frequency_hz'] / 1e6:.3f} MHz")
+        state = st.get("state") or "?"
+        if st.get("remote"):
+            state += f" {st['remote']}"
+        bits.append(state)
+        verdict = st.get("verdict")
+        if verdict:
+            bits.append({"legal": "TX legal", "warning": "TX warning",
+                         "blocked": "TX blocked"}.get(verdict, verdict))
+        self._aether_lbl.setText(" · ".join(bits))
+        self._aether_lbl.setToolTip(st.get("verdict_text", ""))
+        probs = st.get("problems") or []
+        self._aether_problems.setText("\n".join(f"⚠ {p}" for p in probs))
+        self._aether_problems.setVisible(bool(probs))
 
     def _on_abort(self):
         mux = self._im.get_mux(self._name)
@@ -289,7 +359,7 @@ class VARAStatusPanel(QScrollArea):
             QLabel { padding: 0px; }
         """)
 
-        title = QLabel("VARA Instances")
+        title = QLabel("Modem Instances")
         title.setStyleSheet("font-size:12pt;font-weight:bold;padding:0px;")
         layout.addWidget(title)
 
@@ -351,6 +421,8 @@ class VARAStatusPanel(QScrollArea):
         self._bus.subscribe(EventType.SIMULATOR_INACTIVE,   self._on_sim_inactive)
         self._bus.subscribe(EventType.CONFIG_CHANGED,       self._on_config_changed)
         self._bus.subscribe(EventType.SCAN_FREQ_CHANGED,    self._on_scan_freq)
+        self._bus.subscribe(EventType.LINK_QUALITY,         self._on_link_quality)
+        self._bus.subscribe(EventType.AETHER_STATUS,        self._on_aether_status)
 
     def _on_config_changed(self, event):
         new_cfg = (event.data or {}).get("config")
@@ -401,7 +473,7 @@ class VARAStatusPanel(QScrollArea):
                         card.on_session_connected(status.current_call)
 
         layout.addStretch()
-        log.info(f"VARA panel rebuilt — {len(self._cards)} instance card(s)")
+        log.info(f"Modem panel rebuilt — {len(self._cards)} instance card(s)")
 
     # Event callbacks run in background threads → use invokeMethod pattern
     def _card_slot(self, instance, method, *args):
@@ -469,6 +541,26 @@ class VARAStatusPanel(QScrollArea):
                 Q_ARG(float, d.get("freq_khz", 0.0)),
                 Q_ARG(int, d.get("channel_index", 0)),
                 Q_ARG(int, d.get("total_channels", 0)))
+
+    def _on_link_quality(self, event):
+        card = self._cards.get(event.source)
+        if card:
+            d = event.data or {}
+            from PyQt6.QtCore import QMetaObject, Q_ARG
+            snr = d.get("snr_db")
+            QMetaObject.invokeMethod(card, "on_link_quality",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(float, float("nan") if snr is None else float(snr)),
+                Q_ARG(int, int(d.get("level", -1))),
+                Q_ARG(int, int(d.get("bps", -1))))
+
+    def _on_aether_status(self, event):
+        card = self._cards.get(event.source)
+        if card:
+            from PyQt6.QtCore import QMetaObject, Q_ARG
+            QMetaObject.invokeMethod(card, "on_aether_status",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, json.dumps(event.data or {}, default=str)))
 
     def _on_vara_tcp_up(self, event):
         card = self._cards.get(event.source)

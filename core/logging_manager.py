@@ -100,7 +100,7 @@ def setup_logging(cfg: LoggingConfig) -> None:
 
     # Rotating main log file
     main_file = logging.handlers.RotatingFileHandler(
-        log_dir / "vara_fm_bbs.log",
+        log_dir / "aether_bbs.log",
         maxBytes=cfg.max_bytes,
         backupCount=cfg.backup_count,
         encoding="utf-8",
