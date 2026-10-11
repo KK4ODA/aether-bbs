@@ -896,6 +896,25 @@ class SettingsTab(QScrollArea):
         self._inst_ae_monitor.toggled.connect(self._on_inst_field_changed)
         ae_form.addRow(self._inst_ae_monitor)
 
+        aprs_widget = QWidget()
+        aprs_row = QHBoxLayout(aprs_widget)
+        aprs_row.setContentsMargins(0, 0, 0, 0)
+        self._inst_ae_aprs = QCheckBox("APRS beacon on the air, every")
+        self._inst_ae_aprs.setToolTip(
+            "Send the BBS position (Station settings) as an APRS frame in an\n"
+            "Aether datagram. Other Aether stations hand it to their APRS\n"
+            "programs. Aether's rules decide where this station may send it.")
+        self._inst_ae_aprs.toggled.connect(self._on_inst_field_changed)
+        self._inst_ae_aprs_iv = QSpinBox()
+        self._inst_ae_aprs_iv.setRange(10, 1440)
+        self._inst_ae_aprs_iv.setValue(60)
+        self._inst_ae_aprs_iv.setSuffix(" min")
+        self._inst_ae_aprs_iv.valueChanged.connect(self._on_inst_field_changed)
+        aprs_row.addWidget(self._inst_ae_aprs)
+        aprs_row.addWidget(self._inst_ae_aprs_iv)
+        aprs_row.addStretch()
+        ae_form.addRow(aprs_widget)
+
         self._inst_ae_config = QLineEdit()
         self._inst_ae_config.setPlaceholderText("optional — standalone aetherd only")
         self._inst_ae_config.setToolTip(
@@ -1112,6 +1131,8 @@ class SettingsTab(QScrollArea):
             "control_token": self._inst_ae_token.text().strip(),
             "monitor": self._inst_ae_monitor.isChecked(),
             "config_file": self._inst_ae_config.text().strip(),
+            "aprs_beacon": self._inst_ae_aprs.isChecked(),
+            "aprs_interval": self._inst_ae_aprs_iv.value(),
         })
         # PTT method from combo; rest of PTTConfig preserved from dialog
         ptt = d["ptt"]
@@ -1173,6 +1194,8 @@ class SettingsTab(QScrollArea):
         self._inst_ae_token.setText(ae.control_token)
         self._inst_ae_monitor.setChecked(ae.monitor)
         self._inst_ae_config.setText(ae.config_file)
+        self._inst_ae_aprs.setChecked(ae.aprs_beacon)
+        self._inst_ae_aprs_iv.setValue(ae.aprs_interval)
         self._ae_test_label.setText("")
 
         self._inst_auto_start.setChecked(d.get("auto_start", False))

@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QPushButton, QScrollArea, QFrame, QSizePolicy,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QLineEdit, QTextEdit, QComboBox
+    QLineEdit, QTextEdit, QComboBox, QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QColor
@@ -142,6 +142,28 @@ class InstanceCard(QGroupBox):
         layout.addWidget(self._aether_lbl)
         layout.addWidget(self._aether_problems)
 
+        if transport == "AETHER_HF":
+            ae_row = QHBoxLayout()
+            probe_btn = QPushButton("Probe…")
+            probe_btn.setToolTip(
+                "Ask another Aether station whether it hears this one, and\n"
+                "how well — one short transmission each way, no session.")
+            probe_btn.clicked.connect(self._on_probe)
+            beacon_btn = QPushButton("Beacon")
+            beacon_btn.setToolTip(
+                "Send one beacon with the BBS callsign on Aether's tone floor.\n"
+                "Refused under automatic control (§97.203(d)).")
+            beacon_btn.clicked.connect(self._on_beacon)
+            for b in (probe_btn, beacon_btn):
+                b.setFixedHeight(22)
+                ae_row.addWidget(b)
+            ae_row.addStretch()
+            layout.addLayout(ae_row)
+            self._aether_action_lbl = QLabel("")
+            self._aether_action_lbl.setWordWrap(True)
+            self._aether_action_lbl.setStyleSheet("color:#b9a6ff;font-size:9pt;")
+            layout.addWidget(self._aether_action_lbl)
+
         # Control buttons
         btn_layout = QHBoxLayout()
         self._btn_start   = QPushButton("Start")
@@ -266,6 +288,54 @@ class InstanceCard(QGroupBox):
         probs = st.get("problems") or []
         self._aether_problems.setText("\n".join(f"⚠ {p}" for p in probs))
         self._aether_problems.setVisible(bool(probs))
+
+    # ── Aether HF actions ────────────────────────────────────────────────
+
+    def _aether_client(self):
+        status = self._im.get_status(self._name) if self._im else None
+        client = getattr(status, "aether_client", None)
+        if client is None:
+            self._aether_action_lbl.setText(
+                "Aether HF is not running for this instance.")
+        return client
+
+    def _run_aether_action(self, label: str, fn):
+        import threading
+        from aether.control import AetherControlError
+        from PyQt6.QtCore import QMetaObject, Q_ARG
+        self._aether_action_lbl.setText(f"{label}…")
+
+        def work():
+            try:
+                text = fn()
+            except AetherControlError as e:
+                text = f"{label}: {e}"
+            QMetaObject.invokeMethod(
+                self, "_show_aether_action", Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, text))
+        threading.Thread(target=work, daemon=True, name=f"Aether-{label}").start()
+
+    @pyqtSlot(str)
+    def _show_aether_action(self, text: str):
+        self._aether_action_lbl.setText(text)
+        log.info(f"[{self._name}] {text}")
+
+    def _on_probe(self):
+        client = self._aether_client()
+        if client is None:
+            return
+        call, ok = QInputDialog.getText(
+            self, "Probe a station", "Callsign to probe:")
+        call = call.strip().upper()
+        if ok and call:
+            self._run_aether_action(f"Probe {call}", lambda: client.probe(call))
+
+    def _on_beacon(self):
+        client = self._aether_client()
+        if client is not None:
+            self._run_aether_action(
+                "Beacon", lambda: (client.beacon(), "Beacon queued — it goes "
+                                   "out when the channel is clear.")[1])
 
     def _on_abort(self):
         mux = self._im.get_mux(self._name)

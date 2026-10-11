@@ -13,7 +13,8 @@ delivery.
 ### Transports
 - **VARA FM** and **VARA HF** over VARA's TCP host interface
 - **Aether HF**, the open-source HF modem: sessions over its VARA-compatible host interface,
-  plus its control API for status, faults, signal reports and heard stations on the dashboard
+  plus its control API for status, faults, signal reports, heard stations, *Update required*
+  warnings, and Probe / Beacon buttons on the dashboard
   ([guide](docs/AETHER_HF.md))
 - **Soundmodem / Direwolf** AX.25 packet over AGWPE (KISS is planned)
 - One transport per instance; run several instances side by side, each on its own ports
@@ -59,7 +60,7 @@ delivery.
 - Configurable event triggers (new registrations, urgent bulletins, priority messages)
 
 ### Infrastructure
-- APRS-IS gateway with position beaconing
+- APRS-IS gateway with position beaconing, and APRS beacons on the air through Aether HF
 - Internet connectivity monitoring with automatic notifications
 - PyQt6 GUI with dashboard, message viewer, settings, packet monitor, and log viewer
 - TOML configuration with automatic migration and corrupt-config recovery

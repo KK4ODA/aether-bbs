@@ -224,6 +224,10 @@ class AetherConfig(BaseModel):
     bandwidth:        int  = Field(default=0)
     # Optional --config file passed when auto-starting the standalone aetherd.
     config_file:      str  = ""
+    # APRS position beacon on the air as an Aether datagram (heard by other
+    # Aether stations' APRS programs).  Interval in minutes.
+    aprs_beacon:      bool = False
+    aprs_interval:    int  = Field(default=60, ge=10, le=1440)
 
     @model_validator(mode="after")
     def _check_bandwidth(self) -> "AetherConfig":

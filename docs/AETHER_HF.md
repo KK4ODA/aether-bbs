@@ -72,6 +72,8 @@ data_port = 8301           # always cmd_port + 1
 control_port = 8515        # Aether's control API
 control_token = ""         # remote aetherd only; stored encrypted
 monitor = true             # dashboard status + MHeard
+aprs_beacon = false        # APRS position as an Aether datagram
+aprs_interval = 60         # minutes (10–1440)
 bandwidth = 0              # 0 = Aether's own; 500 or 2300 = ask for it
 config_file = ""           # --config, standalone aetherd only
 ```
@@ -94,6 +96,24 @@ the BBS takes the caller as the remote station and runs the normal BBS session. 
 `Aether HF 0.2.0-beta.102 · N0CALL-10 · 2300 Hz · 14.105 MHz · idle · TX legal`, and below it,
 in amber, anything that needs attention. The same conditions are written to the log once
 each, with a matching *resolved* line when they clear.
+
+**Probe and Beacon.** The card's *Probe…* asks another Aether station whether it hears the
+BBS and how well: one short transmission each way on Aether's tone floor, no session. The
+answer appears on the card, for example `KK4XYZ hears us at 7 dB, heard at 9 dB`. *Beacon*
+sends one beacon with the BBS callsign; Aether refuses beacons under automatic control
+(§97.203(d)), and the card says so.
+
+**APRS on the air.** *APRS beacon on the air, every … min* (off by default) sends the BBS's
+APRS position, from the Station settings, as an AX.25 frame in an Aether datagram. Every
+Aether station that decodes it hands it to its own APRS programs over its KISS port. The BBS
+uses Aether's control API rather than its KISS port, because that port holds back program
+frames while a host program such as the BBS is attached. Aether judges each beacon as a
+transmission this station originates: under automatic control, only where the rules allow
+it. Datagrams wait while a session is up.
+
+**Update required.** When a station on another Aether link protocol calls the BBS, or answers
+it, the card shows *Update required* with Aether's sentence naming which station must update.
+The two cannot connect until then.
 
 **MHeard.** Stations Aether hears (beacons, calls, probes, datagrams, sessions) are added to
 the BBS's heard list under the instance's name.
@@ -139,7 +159,8 @@ control.
 | *No rules chosen* / *TX blocked here* | Aether Setup step 1, or tune to a dial the rules allow (automatic control keeps to the automatic sub-bands) |
 | *control API not reachable* | Aether is not running, or `control_port` differs from Aether's `[control]` port; sessions still work without it |
 | *MISSING SOUNDCARD* in the log | Aether's sound card would not open: check it in Aether's Setup step 2 |
-| The other station cannot connect | Both stations must run the same Aether link protocol; update both |
+| The other station cannot connect | Both stations must run the same Aether link protocol: the card says *Update required* and which one; update it |
+| Probe says *no answer* | The other station is not listening, is on another dial or bandwidth, or cannot hear the BBS; try again or check the band |
 
 Aether HF's own documentation:
 [host interfaces](https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md),

@@ -34,6 +34,7 @@ class InstanceStatus:
         self.subprocess:    Optional[object] = None   # raw Popen (Soundmodem, Aether HF)
         self.aether_client: Optional[object] = None   # AetherControlClient
         self.aether_monitor: Optional[object] = None  # AetherMonitor
+        self.aether_aprs:   Optional[object] = None   # AetherAPRSBeacon
         self.bytes_tx:      int = 0
         self.bytes_rx:      int = 0
         self.sessions_total: int = 0
@@ -282,6 +283,9 @@ class VARAFMInstanceManager:
         if status.aether_monitor:
             status.aether_monitor.stop()
             status.aether_monitor = None
+        if status.aether_aprs:
+            status.aether_aprs.stop()
+            status.aether_aprs = None
 
         # ── Control API client and monitor ───────────────────────────
         token = ""
@@ -357,6 +361,15 @@ class VARAFMInstanceManager:
             monitor = AetherMonitor(cfg.name, client, self._bus)
             status.aether_monitor = monitor
             monitor.start()
+
+        if acfg.aprs_beacon:
+            from aether.aprs import AetherAPRSBeacon
+            beacon = AetherAPRSBeacon(cfg.name, client, lambda: self._config,
+                                      acfg.aprs_interval)
+            status.aether_aprs = beacon
+            beacon.start()
+            log.info(f"[{cfg.name}] APRS beacon over Aether HF every "
+                     f"{acfg.aprs_interval} min")
 
         # ── Attach to the VARA-compatible host interface ─────────────
         log.info(f"[{cfg.name}] Connecting to Aether HF host interface on "
@@ -444,6 +457,9 @@ class VARAFMInstanceManager:
         if status.aether_monitor:
             status.aether_monitor.stop()
             status.aether_monitor = None
+        if status.aether_aprs:
+            status.aether_aprs.stop()
+            status.aether_aprs = None
         if (status.aether_client and status.subprocess
                 and status.subprocess.poll() is None):
             # An Aether HF the BBS started: let the daemon end any session on
