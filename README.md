@@ -16,7 +16,8 @@ delivery.
   plus its control API for status, faults, signal reports, heard stations, *Update required*
   warnings, and Probe / Beacon buttons on the dashboard
   ([guide](docs/AETHER_HF.md))
-- **Soundmodem / Direwolf** AX.25 packet over AGWPE (KISS is planned)
+- **Soundmodem / Direwolf** AX.25 packet over AGWPE (both programs provide it; KISS is not
+  supported, since the BBS relies on AGWPE's AX.25 connected mode)
 - One transport per instance; run several instances side by side, each on its own ports
 - Per-instance PTT for VARA HF (and Aether HF in host-keyed mode): OmniRig, FLrig, Hamlib,
   CM108, or serial RTS/DTR

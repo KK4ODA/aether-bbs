@@ -964,8 +964,10 @@ class SettingsTab(QScrollArea):
         sm_form.addRow("AGWPE Port:", self._inst_sm_port)
 
         self._inst_sm_protocol = QComboBox()
-        self._inst_sm_protocol.addItems(["AGWPE", "KISS"])
-        self._inst_sm_protocol.setToolTip("AGWPE — binary frame protocol (most common)\nKISS — serial TNC protocol (planned)")
+        self._inst_sm_protocol.addItems(["AGWPE"])
+        self._inst_sm_protocol.setToolTip(
+            "AGWPE: Soundmodem and Direwolf both provide it (port 8000).\n"
+            "KISS is not supported: use the program's AGWPE port.")
         self._inst_sm_protocol.currentTextChanged.connect(self._on_inst_field_changed)
         sm_form.addRow("Protocol:", self._inst_sm_protocol)
 
@@ -1181,7 +1183,7 @@ class SettingsTab(QScrollArea):
         self._inst_sm_host.setText(getattr(sm, "host", "127.0.0.1"))
         self._inst_sm_port.setValue(getattr(sm, "port", 8000))
         proto = getattr(sm, "protocol", "AGWPE")
-        if proto in ("AGWPE", "KISS"):
+        if proto == "AGWPE":
             self._inst_sm_protocol.setCurrentText(proto)
         self._inst_sm_auto_launch.setChecked(getattr(sm, "auto_launch", False))
         self._inst_sm_exe.setText(getattr(sm, "exe_path", ""))

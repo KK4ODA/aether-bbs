@@ -28,7 +28,7 @@ from PyQt6.QtCore import Qt, QMetaObject, Q_ARG, pyqtSlot
 from PyQt6.QtGui import QColor, QFont
 
 from core.events import EventBus, EventType
-from vara.instance_manager import VARAFMInstanceManager
+from vara.instance_manager import ModemInstanceManager
 from bbs.store import MessageStore
 
 log = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def _duration(start_iso: str, end_iso) -> str:
 
 class ActivityMonitorTab(QWidget):
 
-    def __init__(self, im: VARAFMInstanceManager, store: MessageStore,
+    def __init__(self, im: ModemInstanceManager, store: MessageStore,
                  bus: EventBus, parent=None):
         super().__init__(parent)
         self._im    = im

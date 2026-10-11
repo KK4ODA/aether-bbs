@@ -45,12 +45,12 @@ class PortConflictError(Exception):
     pass
 
 
-class VARAFMInstanceManager:
+class ModemInstanceManager:
     """
-    Manages all enabled VARA FM instances.
+    Manages all enabled modem instances (VARA FM/HF, Soundmodem, Aether HF).
     Each instance has:
-      - A VARAFMProcess (VARAFM.exe lifecycle)
-      - A VARAFMMux (TCP session arbitration)
+      - its modem process, when the BBS starts it
+      - a broker (TCP session arbitration)
     """
 
     def __init__(self, config: AppConfig, event_bus: EventBus):
@@ -200,7 +200,7 @@ class VARAFMInstanceManager:
         self._start_vara_instance(status)
 
     def _start_soundmodem_instance(self, status: InstanceStatus):
-        """Start a Soundmodem/AX.25 instance via AGWPE or KISS broker.
+        """Start a Soundmodem/AX.25 instance via the AGWPE broker.
 
         If the soundmodem config has ``auto_launch=True`` and a valid
         ``exe_path``, the executable is started before connecting.
@@ -241,7 +241,15 @@ class VARAFMInstanceManager:
             from transport.agwpe_broker import AGWPEBroker
             mux = AGWPEBroker(cfg, self._config, self._bus)
         else:
-            log.error(f"[{cfg.name}] KISS transport not yet implemented")
+            log.error(
+                f"[{cfg.name}] Soundmodem over KISS is not supported. Set the "
+                f"instance's protocol to AGWPE and its port to the program's "
+                f"AGWPE port (Soundmodem and Direwolf: 8000)."
+            )
+            self._bus.emit(
+                EventType.VARA_PROCESS_DOWN, source=cfg.name,
+                data={"error": "KISS not supported; use AGWPE"},
+            )
             return
 
         status.mux = mux
@@ -535,3 +543,4 @@ class VARAFMInstanceManager:
             s = self._instances.get(event.source)
             if s:
                 s.process_state = ProcessState.CRASHED
+

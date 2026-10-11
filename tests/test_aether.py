@@ -322,6 +322,14 @@ class TestControlAPI:
         from aether.control import AetherControlClient
         assert AetherControlClient("127.0.0.1", _free_port(), timeout=0.5).ping() is False
 
+    def test_remote_only_during_a_session(self):
+        from aether.monitor import summarize_status
+        st = json.loads(json.dumps(STATUS))
+        st["remote"] = "WC4Y"            # aetherd keeps the last station
+        assert summarize_status(st)["remote"] == ""
+        st["state"] = "connected"
+        assert summarize_status(st)["remote"] == "WC4Y"
+
     def test_problems(self):
         from aether.monitor import problems, summarize_status
         st = json.loads(json.dumps(STATUS))

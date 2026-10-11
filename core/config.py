@@ -193,10 +193,13 @@ class RigControlConfig(BaseModel):
 
 class SoundmodemConfig(BaseModel):
     """Soundmodem / AX.25 packet modem connection settings."""
+    # AGWPE only.  "KISS" is still read (older configs) but not supported:
+    # the BBS has no AX.25 connected-mode stack of its own, and Soundmodem
+    # and Direwolf both offer AGWPE, which provides one.
     protocol:       str  = Field(default="AGWPE",
                                   pattern="^(AGWPE|KISS)$")
     host:           str  = "127.0.0.1"
-    port:           int  = Field(default=8000, ge=1, le=65535)  # AGWPE=8000, KISS varies
+    port:           int  = Field(default=8000, ge=1, le=65535)  # AGWPE: 8000
     my_callsign:    str  = ""     # station callsign for AX.25
     my_ssid:        int  = Field(default=0, ge=0, le=15)
     exe_path:       str  = ""     # path to Soundmodem / Direwolf executable
