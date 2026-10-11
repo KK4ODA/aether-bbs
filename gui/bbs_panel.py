@@ -18,7 +18,7 @@ from PyQt6.QtGui import QColor
 
 from core.config import AppConfig
 from core.events import EventBus, EventType
-from vara.instance_manager import VARAFMInstanceManager
+from vara.instance_manager import ModemInstanceManager
 from bbs.store import MessageStore
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class BBSStatusPanel(QWidget):
     def __init__(
         self,
         config: AppConfig,
-        im: VARAFMInstanceManager,
+        im: ModemInstanceManager,
         store: MessageStore,
         bus: EventBus,
         gateway=None,

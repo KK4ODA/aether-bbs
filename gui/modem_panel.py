@@ -1,5 +1,5 @@
 """
-gui/vara_panel.py
+gui/modem_panel.py
 
 Modem Status Panel (VARA FM/HF, Soundmodem and Aether HF instances).
 Displays one status card per configured instance showing:
@@ -20,7 +20,7 @@ from PyQt6.QtGui import QColor
 
 from core.config import AppConfig
 from core.events import EventBus, EventType
-from vara.instance_manager import VARAFMInstanceManager
+from vara.instance_manager import ModemInstanceManager
 from vara.process import ProcessState
 from gui.theme import STATE_COLORS
 
@@ -39,7 +39,7 @@ def _indicator(color: str, size: int = 14) -> QLabel:
 class InstanceCard(QGroupBox):
     """One status card for one modem instance."""
 
-    def __init__(self, instance_name: str, im: VARAFMInstanceManager,
+    def __init__(self, instance_name: str, im: ModemInstanceManager,
                  inst_cfg=None, parent=None):
         super().__init__(instance_name, parent)
         self._name = instance_name
@@ -280,7 +280,10 @@ class InstanceCard(QGroupBox):
             state += f" {st['remote']}"
         bits.append(state)
         verdict = st.get("verdict")
-        if verdict:
+        if st.get("policy") == "none":
+            # No regulatory profile: Aether checks nothing, the operator does
+            bits.append("no rules set")
+        elif verdict:
             bits.append({"legal": "TX legal", "warning": "TX warning",
                          "blocked": "TX blocked"}.get(verdict, verdict))
         self._aether_lbl.setText(" · ".join(bits))
@@ -379,13 +382,13 @@ class InstanceCard(QGroupBox):
 
 
 
-class VARAStatusPanel(QScrollArea):
+class ModemStatusPanel(QScrollArea):
     """Scrollable panel containing one InstanceCard per configured instance."""
 
     def __init__(
         self,
         config: AppConfig,
-        im: VARAFMInstanceManager,
+        im: ModemInstanceManager,
         bus: EventBus,
         store=None,
         bulletin_store=None,

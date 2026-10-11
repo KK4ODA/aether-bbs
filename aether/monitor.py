@@ -31,12 +31,16 @@ def summarize_status(st: dict) -> dict:
     reg = st.get("regulatory") or {}
     indicator = reg.get("indicator") or {}
     metrics = st.get("metrics") or {}
+    state = str(st.get("state", "")).lower()
     return {
         "reachable":     True,
         "version":       st.get("version", ""),
-        "state":         str(st.get("state", "")).lower(),
+        "state":         state,
         "callsign":      st.get("callsign", ""),
-        "remote":        st.get("remote") or "",
+        # status keeps the last station after a session; show it only
+        # while there is one
+        "remote":        (st.get("remote") or "") if state in (
+                             "connecting", "connected", "disconnecting") else "",
         "bandwidth_hz":  bw.get("bandwidth_hz"),
         "mode":          st.get("mode"),
         "frequency_hz":  st.get("frequency_hz"),

@@ -798,7 +798,8 @@ class InteractiveSession:
         import secrets as _sec
         nonce = _sec.token_hex(16)
         self._send(f";WLREG NONCE {nonce}\r\n")
-        self._send("VARA Term will prompt for your Winlink password.\r\n")
+        self._send("Your terminal program (e.g. VARA Term) will prompt for "
+                   "your Winlink password.\r\n")
 
         # Wait for encrypted response
         line = self._get_line(timeout=120)

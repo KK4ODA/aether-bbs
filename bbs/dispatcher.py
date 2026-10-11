@@ -15,7 +15,7 @@ from typing import Optional
 
 from core.config import AppConfig, ConfigManager
 from core.events import EventBus, EventType
-from vara.instance_manager import VARAFMInstanceManager
+from vara.instance_manager import ModemInstanceManager
 from vara.mux import VARAFMMux
 from bbs.store import MessageStore
 from bbs.b2f import B2FSession
@@ -166,7 +166,7 @@ class SessionDispatcher:
     def __init__(
         self,
         config,
-        instance_manager: VARAFMInstanceManager,
+        instance_manager: ModemInstanceManager,
         store: MessageStore,
         event_bus: EventBus,
         bulletin_store: Optional[BulletinStore] = None,

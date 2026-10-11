@@ -19,10 +19,10 @@ from gui.theme import GREEN, RED, YELLOW, TEXT_MUTED
 from core.config import AppConfig
 from core.config import ConfigManager
 from core.events import EventBus, EventType, Event
-from vara.instance_manager import VARAFMInstanceManager
+from vara.instance_manager import ModemInstanceManager
 from bbs.store import MessageStore
 
-from gui.vara_panel import VARAStatusPanel
+from gui.modem_panel import ModemStatusPanel
 from gui.bbs_panel import BBSStatusPanel
 from gui.settings import SettingsTab
 from gui.log_viewer import LogViewerTab
@@ -69,7 +69,7 @@ class MainWindow(QMainWindow):
         self,
         config_manager: ConfigManager,
         config: AppConfig,
-        instance_manager: VARAFMInstanceManager,
+        instance_manager: ModemInstanceManager,
         store: MessageStore,
         event_bus: EventBus,
         bulletin_store=None,
@@ -141,7 +141,7 @@ class MainWindow(QMainWindow):
 
         # ── Tab 1: Dashboard ──────────────────────────────────────────
         # Modem status + BBS status side by side
-        self._vara_panel = VARAStatusPanel(
+        self._modem_panel = ModemStatusPanel(
             self._config, self._im, self._bus,
             store=self._store, bulletin_store=self._bbs,
             parent=self
@@ -160,7 +160,7 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
-        left_layout.addWidget(self._vara_panel)
+        left_layout.addWidget(self._modem_panel)
 
         self._winlink_panel = WinlinkPanel(self._bus, parent=self)
         if self._cms_poller:

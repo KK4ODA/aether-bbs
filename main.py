@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt
 from core.config import ConfigManager
 from core.logging_manager import setup_logging, update_vara_cmd_logging
 from core.events import EventBus, EventType
-from vara.instance_manager import VARAFMInstanceManager
+from vara.instance_manager import ModemInstanceManager
 from bbs.store import MessageStore
 from bbs.filestore import FileStore
 from bbs.bulletins import BulletinStore, BulletinForwarder, BulletinForwardingServer
@@ -112,7 +112,7 @@ class BBSApplication:
             self.config, self.message_store, self.bulletin_store, self.event_bus
         )
 
-        self.instance_manager = VARAFMInstanceManager(
+        self.instance_manager = ModemInstanceManager(
             self.config, self.event_bus
         )
         # RF neighbours are called through the modem instances
