@@ -7,4 +7,4 @@ pyserial>=3.5.0
 pytest>=7.0.0
 pytest-qt>=4.2.0
 pyttsx3>=2.90       # optional: TTS audio alerts; falls back to platform TTS if absent
-pywin32>=306        # optional, Windows only: OmniRig PTT control
+pywin32>=306; sys_platform == "win32"   # Windows only: OmniRig PTT control
