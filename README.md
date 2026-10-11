@@ -110,3 +110,7 @@ report helps just as much.
 
 - **KK4ODA** (Facundo) — Author
 - **Claude** (Anthropic) — Co-developer
+
+## License
+
+Copyright (C) 2026 KK4ODA. Released under the GNU General Public License v3.0, see [LICENSE](LICENSE). The GPL is required because the program is built on PyQt6, which is licensed under GPL v3.
