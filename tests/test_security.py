@@ -222,7 +222,8 @@ class TestRegistration(unittest.TestCase):
     def test_register_unknown(self):
         ok, msg = self.ac.register("W4NEW", "Primary")
         self.assertTrue(ok)
-        self.assertIn("Registration request received", msg)
+        self.assertIn("pending sysop review", msg)
+        self.assertIn("W4NEW@winlink.org", msg)
         self.assertEqual(self.ac.get_role("W4NEW"), Role.PENDING)
 
     def test_register_emits_event(self):
@@ -343,7 +344,7 @@ class TestAuthentication(unittest.TestCase):
     def test_challenge_response_correct(self):
         self.ac.set_password("USER1", "hunter2")
         nonce = self.ac.generate_challenge("USER1")
-        self.assertTrue(len(nonce) == 16)  # hex(8 bytes)
+        self.assertEqual(len(nonce), 32)  # hex(16 bytes)
         # Client sends raw password
         self.assertTrue(self.ac.verify_challenge("USER1", "hunter2"))
 
@@ -555,7 +556,7 @@ class TestModePolicy(unittest.TestCase):
         self.assertEqual(policy.mode, "restricted")
         self.assertTrue(policy.require_registration)
         self.assertFalse(policy.auto_approve_on_connect)
-        self.assertFalse(policy.require_password)
+        self.assertTrue(policy.require_password)
         self.assertEqual(policy.min_upload_role, "TRUSTED")
         self.assertEqual(policy.rate_limit_multiplier, 1.0)
 
@@ -738,7 +739,7 @@ class TestSecurityConfig(unittest.TestCase):
     def test_defaults(self):
         sc = SecurityConfig()
         self.assertEqual(sc.operational_mode, "restricted")
-        self.assertFalse(sc.require_password)
+        self.assertTrue(sc.require_password)
         self.assertTrue(sc.require_registration)
         self.assertEqual(sc.auth_failure_threshold, 5)
         self.assertEqual(sc.auth_lockout_minutes, 60)

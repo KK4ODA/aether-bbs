@@ -26,6 +26,7 @@ class _StubSecurity:
     auth_lockout_minutes = 60
     auto_block_threshold = 20
     machine_secret = "test_machine_secret_42"
+    allow_plaintext_auth = True   # SecurityConfig default
 
 class _StubStation:
     sysop_callsign = "KK4ODA"
@@ -51,6 +52,10 @@ class _StubConfig:
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# The report uses box-drawing characters a Windows console (cp1252) cannot print
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # Now import the security modules (they only need stdlib + each other)
 from bbs.access import (
@@ -271,7 +276,7 @@ def test_registration():
     # Register new user
     ok, msg = ac.register("W4NEW", "Primary")
     _assert_true(ok, "register succeeds for UNKNOWN")
-    _assert_in("Registration request received", msg, "success message")
+    _assert_in("pending sysop review", msg, "success message")
     _assert_eq(ac.get_role("W4NEW"), Role.PENDING, "now PENDING")
 
     # Double-register
@@ -376,7 +381,7 @@ def test_authentication():
     # Challenge-response correct
     ac.set_password("USER1", "hunter2")
     nonce = ac.generate_challenge("USER1")
-    _assert_eq(len(nonce), 16, "nonce is 16 hex chars")
+    _assert_eq(len(nonce), 32, "nonce is 32 hex chars")
     _assert_true(ac.verify_challenge("USER1", "hunter2"), "correct password")
 
     # Challenge-response wrong

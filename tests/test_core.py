@@ -375,9 +375,11 @@ class TestBulletinStore:
         assert len(bulletins) == 1
         assert bulletins[0]["subject"] == "bulletin"
 
-        # list_messages should return both (bulletins are stored in same table)
+        # list_messages returns personal mail only: bulletins share the
+        # table but are excluded (is_bulletin = 1)
         all_msgs = store.list_messages()
-        assert len(all_msgs) == 2
+        assert len(all_msgs) == 1
+        assert all_msgs[0]["subject"] == "personal"
 
     def test_bulletin_count(self, stores):
         store, bbs = stores
