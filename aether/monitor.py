@@ -52,6 +52,7 @@ def summarize_status(st: dict) -> dict:
         "verdict":       indicator.get("verdict", ""),
         "verdict_text":  indicator.get("summary", ""),
         "mismatch":      (bw.get("mismatch") or {}).get("sentence", ""),
+        "mismatch_what": (bw.get("mismatch") or {}).get("what", ""),
     }
 
 
@@ -78,7 +79,12 @@ def problems(summary: dict) -> list[str]:
     if summary.get("host_attached") and summary.get("answering") is False:
         out.append("Aether HF is not answering calls (LISTEN is off).")
     if summary.get("mismatch"):
-        out.append(summary["mismatch"])
+        if summary.get("mismatch_what") == "version":
+            # Another station on a different link protocol: the two cannot
+            # connect until one of them updates (Aether ADR-0041).
+            out.append(f"Update required — {summary['mismatch']}")
+        else:
+            out.append(summary["mismatch"])
     return out
 
 

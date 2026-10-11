@@ -13,7 +13,8 @@ delivery.
 ### Transports
 - **VARA FM** and **VARA HF** over VARA's TCP host interface
 - **Aether HF**, the open-source HF modem: sessions over its VARA-compatible host interface,
-  plus its control API for status, faults, signal reports and heard stations on the dashboard
+  plus its control API for status, faults, signal reports, heard stations, *Update required*
+  warnings, and Probe / Beacon buttons on the dashboard
   ([guide](docs/AETHER_HF.md))
 - **Soundmodem / Direwolf** AX.25 packet over AGWPE (KISS is planned)
 - One transport per instance; run several instances side by side, each on its own ports

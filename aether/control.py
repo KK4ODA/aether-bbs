@@ -9,12 +9,16 @@ body — so it needs nothing beyond the standard library.  Responses have the
 shape ``{"ok": true, "result": {...}}`` or
 ``{"ok": false, "error": {"code", "message", "retryable"}}``.
 
+Events (a probe's answer, for one) only travel over the WebSocket form,
+``ws://host:port/v1``; probe() opens one (aether/websocket.py).
+
 A loopback daemon needs no token.  A daemon bound to another interface
 requires ``Authorization: Bearer <token>`` from any non-loopback client.
 """
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Optional
@@ -133,8 +137,36 @@ class AetherControlClient:
         params = {"remote": remote} if remote else None
         return (self.call("sessions.list", params) or {}).get("sessions", [])
 
-    def probe(self, remote: str) -> Any:
-        return self.call("probe", {"remote": remote})
+    def beacon(self) -> Any:
+        """One beacon on the tone floor (refused under automatic control)."""
+        return self.call("beacon")
+
+    def probe(self, remote: str, timeout: float = 60.0) -> str:
+        """Ask ``remote`` whether it hears this station, and how well.
+
+        Returns Aether's sentence — "<call> hears us at <x> dB, heard at <y>
+        dB" or "<call>: no answer".  Raises AetherControlError when the
+        modem refuses the probe (busy, answer-only, the rules).
+        """
+        from aether.websocket import WebSocket
+        with WebSocket(self.host, self.port, self._token, self.timeout) as ws:
+            ws.send_json({"id": "probe", "method": "probe",
+                          "params": {"remote": remote.upper()}})
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                msg = ws.recv_json(deadline - time.time())
+                if msg is None:
+                    break
+                if msg.get("id") == "probe" and not msg.get("ok", True):
+                    err = msg.get("error") or {}
+                    raise AetherControlError(
+                        err.get("message") or "Aether HF refused the probe",
+                        code=err.get("code", ""),
+                        retryable=bool(err.get("retryable", False)))
+                data = msg.get("data") or {}
+                if msg.get("event") == "log" and data.get("name") == "probe":
+                    return str(data.get("detail", ""))
+        return f"{remote.upper()}: no answer reported"
 
     def ping(self) -> bool:
         """True when the control API answers at all."""

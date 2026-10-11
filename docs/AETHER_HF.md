@@ -95,6 +95,16 @@ the BBS takes the caller as the remote station and runs the normal BBS session. 
 in amber, anything that needs attention. The same conditions are written to the log once
 each, with a matching *resolved* line when they clear.
 
+**Probe and Beacon.** The card's *Probe…* asks another Aether station whether it hears the
+BBS and how well: one short transmission each way on Aether's tone floor, no session. The
+answer appears on the card, for example `KK4XYZ hears us at 7 dB, heard at 9 dB`. *Beacon*
+sends one beacon with the BBS callsign; Aether refuses beacons under automatic control
+(§97.203(d)), and the card says so.
+
+**Update required.** When a station on another Aether link protocol calls the BBS, or answers
+it, the card shows *Update required* with Aether's sentence naming which station must update.
+The two cannot connect until then.
+
 **MHeard.** Stations Aether hears (beacons, calls, probes, datagrams, sessions) are added to
 the BBS's heard list under the instance's name.
 
@@ -139,7 +149,8 @@ control.
 | *No rules chosen* / *TX blocked here* | Aether Setup step 1, or tune to a dial the rules allow (automatic control keeps to the automatic sub-bands) |
 | *control API not reachable* | Aether is not running, or `control_port` differs from Aether's `[control]` port; sessions still work without it |
 | *MISSING SOUNDCARD* in the log | Aether's sound card would not open: check it in Aether's Setup step 2 |
-| The other station cannot connect | Both stations must run the same Aether link protocol; update both |
+| The other station cannot connect | Both stations must run the same Aether link protocol: the card says *Update required* and which one; update it |
+| Probe says *no answer* | The other station is not listening, is on another dial or bandwidth, or cannot hear the BBS; try again or check the band |
 
 Aether HF's own documentation:
 [host interfaces](https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md),
