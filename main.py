@@ -115,6 +115,8 @@ class BBSApplication:
         self.instance_manager = VARAFMInstanceManager(
             self.config, self.event_bus
         )
+        # RF neighbours are called through the modem instances
+        self.bulletin_forwarder.set_instance_manager(self.instance_manager)
 
         # Multi-user chat room manager
         from bbs.converse import ConversationManager

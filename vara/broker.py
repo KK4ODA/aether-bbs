@@ -54,6 +54,7 @@ class TNCBroker:
 
         self._session_lock   = threading.Lock()
         self._active_handler: Optional[SessionHandler] = None
+        self._outbound       = False   # an outbound call owns the session
         self._handler_lock   = threading.Lock()
         self._relay_stop     = threading.Event()
         self._retired        = False
@@ -258,6 +259,26 @@ class TNCBroker:
 
         log.info(f"[{self.cfg.name}] Session released by {handler_name}")
         self._interface.send_cmd("LISTEN ON")
+
+    # ── Outbound calls ─────────────────────────────────────────────────────
+
+    def begin_outbound(self, handler: SessionHandler, timeout: float = 15.0) -> bool:
+        """Take the session for a call this station places (e.g. RF
+        forwarding).  While it is held, CONNECTED/DISCONNECTED go to
+        ``handler`` and the dispatcher does not treat the session as an
+        inbound caller."""
+        if not self.acquire_session(handler, timeout=timeout):
+            return False
+        self._outbound = True
+        return True
+
+    def end_outbound(self, handler: SessionHandler):
+        self._outbound = False
+        self.release_session(handler)
+
+    @property
+    def outbound_active(self) -> bool:
+        return self._outbound
 
     # ── Command / data passthrough ─────────────────────────────────────────
 

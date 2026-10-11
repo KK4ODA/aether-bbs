@@ -24,7 +24,8 @@ delivery.
 
 ### BBS
 - Interactive BBS sessions with an SQLite message store
-- Bulletin board with configurable areas and inter-BBS forwarding
+- Bulletin board with configurable areas and inter-BBS forwarding, over TCP or on the air
+  (VARA FM, VARA HF or Aether HF)
 - File storage and transfer with role-based access and virus scanning
 - MHeard station log (Aether HF's heard stations are added to it)
 
@@ -125,6 +126,30 @@ port = 8000
 ```
 
 Ports must be unique across enabled instances.
+
+## Bulletin forwarding
+
+Neighbour BBSs are listed under **Settings → Forwarding**. Each one is called on its own
+interval and the two exchange the bulletins the other has not seen (urgent ones first):
+
+- **Via TCP**: over the network to the neighbour's forwarding server (host and port; enable
+  this BBS's own server with *server_enabled* to be called).
+- **Via RF**: called on the air through a VARA FM, VARA HF or Aether HF instance. When an RF
+  neighbour calls this BBS, the session goes straight to the forwarding protocol instead of
+  the user menu, so both ends must list each other. A failed call waits for the next
+  interval rather than being retried every minute.
+
+```toml
+[[bbs.forwarding_neighbours]]
+bbs_callsign = "W2BBB-10"
+via = "RF"                  # TCP or RF
+instance = "HF-Aether"      # the modem instance RF calls go through
+interval_minutes = 240
+areas = ["ALL", "WX"]       # empty = all areas
+```
+
+Neighbours are identified by callsign, as with other packet BBS forwarding: list only
+stations you trust.
 
 ## Aether HF
 

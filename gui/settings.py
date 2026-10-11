@@ -1728,27 +1728,31 @@ class SettingsTab(QScrollArea):
 
         nbr_note = QLabel(
             "Each row is a neighbour BBS to call periodically. "
+            "Via TCP uses Host/Port; via RF calls it on the air through the "
+            "chosen modem instance (VARA FM, VARA HF or Aether HF), and its "
+            "calls to this BBS are answered with the forwarding protocol. "
             "Areas: comma-separated list (e.g. ALL,WX) — leave blank for all areas."
         )
         nbr_note.setWordWrap(True)
         nbr_note.setStyleSheet("color:#888;")
         nbr_layout.addWidget(nbr_note)
 
-        self._fwd_table = QTableWidget(0, 6)
+        self._fwd_table = QTableWidget(0, 8)
         self._fwd_table.setToolTip(
             "Neighbour BBSs to exchange bulletins with on a schedule.\n"
             "Areas: comma-separated list of bulletin areas to forward (blank = all)."
         )
         self._fwd_table.setHorizontalHeaderLabels(
-            ["BBS Callsign", "Host", "Port", "Interval (min)", "Areas", "Enabled"]
+            ["BBS Callsign", "Via", "Instance", "Host", "Port",
+             "Interval (min)", "Areas", "Enabled"]
         )
         fhdr = self._fwd_table.horizontalHeader()
-        fhdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        fhdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        fhdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        for col, mode in enumerate((
+                "contents", "contents", "contents", "stretch",
+                "contents", "contents", "stretch", "contents")):
+            fhdr.setSectionResizeMode(
+                col, QHeaderView.ResizeMode.Stretch if mode == "stretch"
+                else QHeaderView.ResizeMode.ResizeToContents)
         self._fwd_table.verticalHeader().setVisible(False)
         nbr_layout.addWidget(self._fwd_table)
 
@@ -1772,25 +1776,42 @@ class SettingsTab(QScrollArea):
         self._fwd_table.insertRow(row)
         self._fwd_table.blockSignals(True)
         self._fwd_table.setItem(row, 0, QTableWidgetItem(cfg.bbs_callsign))
-        self._fwd_table.setItem(row, 1, QTableWidgetItem(cfg.host))
+
+        via = QComboBox()
+        via.addItems(["TCP", "RF"])
+        via.setCurrentText(cfg.via)
+        via.setToolTip("TCP: over the network (Host/Port)\n"
+                       "RF: called on the air through the instance")
+        self._fwd_table.setCellWidget(row, 1, via)
+
+        inst = QComboBox()
+        inst.setEditable(True)
+        inst.addItems([i.name for i in self._config.instances
+                       if not i.is_soundmodem])
+        inst.setCurrentText(cfg.instance)
+        inst.setToolTip("Modem instance RF calls go through\n"
+                        "(VARA FM, VARA HF or Aether HF)")
+        self._fwd_table.setCellWidget(row, 2, inst)
+
+        self._fwd_table.setItem(row, 3, QTableWidgetItem(cfg.host))
 
         port_spin = QSpinBox()
         port_spin.setRange(1024, 65535)
         port_spin.setValue(cfg.port)
-        self._fwd_table.setCellWidget(row, 2, port_spin)
+        self._fwd_table.setCellWidget(row, 4, port_spin)
 
         iv_spin = QSpinBox()
         iv_spin.setRange(5, 1440)
         iv_spin.setValue(cfg.interval_minutes)
         iv_spin.setSuffix(" min")
-        self._fwd_table.setCellWidget(row, 3, iv_spin)
+        self._fwd_table.setCellWidget(row, 5, iv_spin)
 
-        self._fwd_table.setItem(row, 4, QTableWidgetItem(", ".join(cfg.areas)))
+        self._fwd_table.setItem(row, 6, QTableWidgetItem(", ".join(cfg.areas)))
         chk = QTableWidgetItem()
         chk.setCheckState(
             Qt.CheckState.Checked if cfg.enabled else Qt.CheckState.Unchecked
         )
-        self._fwd_table.setItem(row, 5, chk)
+        self._fwd_table.setItem(row, 7, chk)
         self._fwd_table.blockSignals(False)
 
     def _add_neighbour(self):
@@ -3391,20 +3412,24 @@ class SettingsTab(QScrollArea):
         for row in range(self._fwd_table.rowCount()):
             def fcell(c): return (self._fwd_table.item(row, c) or QTableWidgetItem("")).text()
             def fchk(c): return (self._fwd_table.item(row, c) or QTableWidgetItem()).checkState() == Qt.CheckState.Checked
-            port_widget = self._fwd_table.cellWidget(row, 2)
-            iv_widget   = self._fwd_table.cellWidget(row, 3)
+            via_widget  = self._fwd_table.cellWidget(row, 1)
+            inst_widget = self._fwd_table.cellWidget(row, 2)
+            port_widget = self._fwd_table.cellWidget(row, 4)
+            iv_widget   = self._fwd_table.cellWidget(row, 5)
             port = port_widget.value() if port_widget else 7300
             iv   = iv_widget.value()   if iv_widget   else 60
             call = fcell(0).strip().upper()
             if call and call != "N0CALL-1":
-                raw_areas = [a.strip().upper() for a in fcell(4).split(",") if a.strip()]
+                raw_areas = [a.strip().upper() for a in fcell(6).split(",") if a.strip()]
                 neighbours.append(ForwardingNeighbourConfig(
                     bbs_callsign=call,
-                    host=fcell(1).strip() or "127.0.0.1",
+                    via=via_widget.currentText() if via_widget else "TCP",
+                    instance=inst_widget.currentText().strip() if inst_widget else "",
+                    host=fcell(3).strip() or "127.0.0.1",
                     port=port,
                     interval_minutes=iv,
                     areas=raw_areas,
-                    enabled=fchk(5),
+                    enabled=fchk(7),
                 ))
 
         # ── File upload policy ───────────────────────────────────────────

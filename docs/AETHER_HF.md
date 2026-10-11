@@ -98,6 +98,11 @@ each, with a matching *resolved* line when they clear.
 **MHeard.** Stations Aether hears (beacons, calls, probes, datagrams, sessions) are added to
 the BBS's heard list under the instance's name.
 
+**Bulletin forwarding.** A forwarding neighbour set to *via RF* with this instance is
+called through Aether HF on its interval (see the README's *Bulletin forwarding*). Under
+automatic control, Aether's rules decide where the BBS may originate a call; a call they
+refuse ends at once and is tried again at the next interval.
+
 **Starting and stopping.** Auto Start launches the executable only when Aether's control API
 is not already answering; the BBS checks the control API, never the host port, because a
 probe connection to the host port could take the one host slot. Stopping the instance stops

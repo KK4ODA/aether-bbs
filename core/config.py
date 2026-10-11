@@ -305,11 +305,25 @@ class BulletinAreaConfig(BaseModel):
 
 class ForwardingNeighbourConfig(BaseModel):
     bbs_callsign:     str        = "N0CALL-1"
+    # How to reach the neighbour: "TCP" (host/port, the network) or "RF"
+    # (call it on the air through the modem instance named in `instance`:
+    # VARA FM, VARA HF or Aether HF).
+    via:              str        = Field(default="TCP", pattern="^(TCP|RF)$")
+    instance:         str        = ""
     host:             str        = "127.0.0.1"
     port:             int        = Field(default=7300, ge=1024, le=65535)
     enabled:          bool       = True
     interval_minutes: int        = Field(default=60, ge=5)    # how often to call
     areas:            list[str]  = Field(default_factory=list) # empty = all areas
+
+    def matches(self, callsign: str) -> bool:
+        """True when ``callsign`` is this neighbour.  A neighbour entered
+        without an SSID matches any SSID of that callsign."""
+        mine = self.bbs_callsign.strip().upper()
+        theirs = callsign.strip().upper()
+        if mine == theirs:
+            return True
+        return "-" not in mine and theirs.split("-")[0] == mine
 
 
 class ForwardingConfig(BaseModel):

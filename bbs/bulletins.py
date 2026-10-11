@@ -14,6 +14,7 @@ This module provides:
 """
 
 import time
+import queue
 import logging
 import threading
 import socket
@@ -338,6 +339,60 @@ class BulletinStore:
             return cur.fetchall()
 
 
+# ── RF link for forwarding calls ───────────────────────────────────────────────
+
+RF_LINE_TIMEOUT    = 180.0   # an HF round trip at a slow rung can take minutes
+RF_CONNECT_TIMEOUT = 180.0   # calling, including the modem's retries
+_HANDSHAKE_SKIP    = 30      # lines (a banner) tolerated before the HELLO
+
+
+class _RFLink:
+    """Session handler for one outbound forwarding call.
+
+    Plugs into a TNCBroker's begin_outbound(): receives CONNECTED /
+    DISCONNECTED and the data stream, and offers line-based send/recv.
+    """
+
+    def __init__(self, broker):
+        self._broker = broker
+        self._lines: queue.Queue = queue.Queue()
+        self._buf = b""
+        self.connected = threading.Event()
+        self.disconnected = threading.Event()
+
+    # SessionHandler protocol
+    def on_cmd_event(self, event: str):
+        up = event.upper()
+        if up.startswith("CONNECTED"):
+            self.connected.set()
+        elif up.startswith("DISCONNECTED"):
+            self.disconnected.set()
+            self._lines.put(None)
+
+    def on_data(self, data: bytes):
+        self._buf += data
+        while True:
+            cut = min((i for i in (self._buf.find(b"\r"), self._buf.find(b"\n"))
+                       if i >= 0), default=-1)
+            if cut < 0:
+                break
+            line, self._buf = self._buf[:cut], self._buf[cut + 1:]
+            text = line.decode("utf-8", errors="replace").strip()
+            if text:            # "\r\n" leaves an empty line: skipped
+                self._lines.put(text)
+
+    def send(self, line: str):
+        self._broker.send_data((line + "\r").encode("utf-8", errors="replace"))
+
+    def recv(self, timeout: float = RF_LINE_TIMEOUT) -> Optional[str]:
+        if self.disconnected.is_set() and self._lines.empty():
+            return None
+        try:
+            return self._lines.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+
 # ── BulletinForwarder — connects to neighbours and exchanges bulletins ─────────
 
 class BulletinForwarder:
@@ -348,8 +403,9 @@ class BulletinForwarder:
     Protocol used: simple line-based BBS forwarding similar to FBB SP/SB protocol.
     Each side offers MIDs it has, the other side requests what it doesn't have.
 
-    This operates entirely over TCP (not RF) — the neighbour BBS must be reachable
-    on the network. For RF-only forwarding, use the VARA FM interface instead.
+    A neighbour is reached over TCP (``via = "TCP"``: host/port) or on the
+    air (``via = "RF"``: a call through a VARA FM, VARA HF or Aether HF
+    instance).  The protocol is the same either way.
     """
 
     # Simple forwarding protocol tokens
@@ -377,6 +433,11 @@ class BulletinForwarder:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._im = None   # instance manager, for RF neighbours
+
+    def set_instance_manager(self, im):
+        """Give the forwarder the modem instances RF neighbours are called on."""
+        self._im = im
 
     def start(self):
         if self._running:
@@ -419,10 +480,11 @@ class BulletinForwarder:
                 if not self._is_due(neighbour):
                     continue
 
-                log.info(
-                    f"Forwarding: connecting to {neighbour.bbs_callsign} "
-                    f"at {neighbour.host}:{neighbour.port}"
-                )
+                where = (f"on the air via {neighbour.instance}"
+                         if neighbour.via == "RF"
+                         else f"at {neighbour.host}:{neighbour.port}")
+                log.info(f"Forwarding: connecting to {neighbour.bbs_callsign} "
+                         f"{where}")
                 try:
                     self._forward_with(neighbour)
                 except Exception as e:
@@ -443,13 +505,18 @@ class BulletinForwarder:
     # ── Per-neighbour session ─────────────────────────────────────────────
 
     def _forward_with(self, neighbour: "ForwardingNeighbourConfig"):
+        if neighbour.via == "RF":
+            self._forward_over_rf(neighbour)
+        else:
+            self._forward_over_tcp(neighbour)
+
+    def _forward_over_tcp(self, neighbour: "ForwardingNeighbourConfig"):
         """Open a TCP connection to the neighbour and exchange bulletins."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(30)
 
         try:
             sock.connect((neighbour.host, neighbour.port))
-            f = sock.makefile("rwb", buffering=0)
 
             def send(line: str):
                 sock.sendall((line + "\r\n").encode("ascii", errors="replace"))
@@ -467,85 +534,155 @@ class BulletinForwarder:
                 except socket.timeout:
                     return None
 
-            # Handshake
-            send(f"{self._FWD_HELLO} {self._config.station.bbs_callsign}")
-            reply = recv()
-            if not reply or not reply.startswith(self._FWD_HELLO):
-                log.warning(
-                    f"Unexpected handshake reply from {neighbour.bbs_callsign}: {reply!r}"
-                )
-                return
-
-            remote_call = reply.split()[2] if len(reply.split()) >= 3 else neighbour.bbs_callsign
-            log.info(f"Forwarding session open with {remote_call}")
-
-            # Phase 1: offer our unsent bulletins to them
-            areas = neighbour.areas or None
-            outbound = self._bbs.get_unsent_bulletins_for(
-                neighbour.bbs_callsign,
-                areas=areas,
-                limit=20,
-            )
-            # Offer urgent bulletins first so they arrive with priority
-            outbound.sort(key=lambda r: (not r.get("is_urgent", 0), r.get("date", "")))
-            for row in outbound:
-                body = row["body"]
-                if isinstance(body, bytes):
-                    size = len(body)
-                else:
-                    size = len(body.encode("utf-8"))
-                send(
-                    f"{self._FWD_OFFER} {row['id']} {row['area']} {size}"
-                )
-                ack = recv()
-                if ack and ack.startswith(self._FWD_GET):
-                    # They want it — send it
-                    self._send_bulletin(send, recv, row)
-                    self._bbs.mark_seen(row["id"], neighbour.bbs_callsign)
-                    self._bbs.log_forward(neighbour.bbs_callsign, "sent", row["id"])
-                    log.info(f"Forwarded MID={row['id']} → {neighbour.bbs_callsign}")
-                else:
-                    # They already have it
-                    self._bbs.mark_seen(row["id"], neighbour.bbs_callsign)
-
-            # Phase 2: ask them what they have for us
-            send(f"{self._FWD_GET} *")  # request their offer list
-            while True:
-                line = recv()
-                if line is None or line.startswith(self._FWD_BYE):
-                    break
-                if line.startswith(self._FWD_OFFER):
-                    parts = line.split()
-                    if len(parts) >= 3:
-                        their_mid = parts[1]
-                        their_area = parts[2]
-                        if self._should_accept(their_mid, their_area, neighbour):
-                            send(f"{self._FWD_GET} {their_mid}")
-                            self._receive_bulletin(send, recv, their_mid, neighbour)
-                        else:
-                            send(f"{self._FWD_NAK} {their_mid}")
-                elif line.startswith(self._FWD_END):
-                    break
-
-            send(self._FWD_BYE)
-            neighbour._last_forwarded_at = time.time()
-
-            self._bus.emit(
-                EventType.MESSAGE_RECEIVED,
-                data={"source": "forwarding", "neighbour": neighbour.bbs_callsign},
-            )
+            self._exchange(send, recv, neighbour)
 
         except (socket.error, OSError) as e:
             log.warning(f"Forwarding TCP error with {neighbour.bbs_callsign}: {e}")
         finally:
             try:
-                f.close()
-            except Exception:
-                pass
-            try:
                 sock.close()
             except Exception:
                 pass
+
+    def _forward_over_rf(self, neighbour: "ForwardingNeighbourConfig"):
+        """Call the neighbour on the air and exchange bulletins.
+
+        The call is placed through the named modem instance (VARA FM, VARA
+        HF or Aether HF).  An attempt counts against the interval whatever
+        its outcome, so an unreachable neighbour is not called every minute.
+        """
+        neighbour._last_forwarded_at = time.time()
+        call = neighbour.bbs_callsign
+        mux = self._im.get_mux(neighbour.instance) if self._im else None
+        if mux is None or not hasattr(mux, "begin_outbound"):
+            log.error(
+                f"Forwarding to {call}: instance '{neighbour.instance}' is not "
+                f"running or cannot place calls (RF forwarding needs a VARA FM, "
+                f"VARA HF or Aether HF instance)"
+            )
+            return
+        if getattr(mux.state, "name", "") == "CONNECTED":
+            log.info(f"Forwarding to {call}: {neighbour.instance} is busy "
+                     f"with a session; will try at the next interval")
+            return
+
+        link = _RFLink(mux)
+        if not mux.begin_outbound(link, timeout=15.0):
+            log.info(f"Forwarding to {call}: {neighbour.instance} is busy; "
+                     f"will try at the next interval")
+            return
+        try:
+            if not mux.connect_station(call, busy_timeout=60.0):
+                log.warning(f"Forwarding to {call}: channel stayed busy")
+                return
+            # Aether HF (and VARA) say DISCONNECTED for a call that ends
+            # without a session: refused by the modem, or unanswered.
+            deadline = time.time() + RF_CONNECT_TIMEOUT
+            while (time.time() < deadline and not link.connected.is_set()
+                   and not link.disconnected.is_set()):
+                link.connected.wait(0.5)
+            if not link.connected.is_set():
+                if link.disconnected.is_set():
+                    log.warning(f"Forwarding to {call}: the call ended without "
+                                f"a session (refused or unanswered — see the "
+                                f"modem's log)")
+                else:
+                    log.warning(f"Forwarding to {call}: no answer")
+                    mux.send_cmd("ABORT")
+                return
+            log.info(f"Forwarding: on the air with {call}")
+            self._exchange(link.send, link.recv, neighbour)
+        finally:
+            if link.connected.is_set() and not link.disconnected.is_set():
+                time.sleep(2.0)   # let FWD BYE go out first
+                mux.send_cmd("DISCONNECT")
+                link.disconnected.wait(60.0)
+            mux.end_outbound(link)
+
+    def _exchange(self, send, recv, neighbour: "ForwardingNeighbourConfig") -> bool:
+        """Run the client side of the forwarding protocol.  True when the
+        session reached its end."""
+        # Handshake.  A neighbour that greets with a banner first (an older
+        # BBS answering on RF) is tolerated: skip lines until its HELLO.
+        send(f"{self._FWD_HELLO} {self._config.station.bbs_callsign}")
+        reply = None
+        for _ in range(_HANDSHAKE_SKIP):
+            reply = recv()
+            if reply is None or reply.startswith(self._FWD_HELLO):
+                break
+        if not reply or not reply.startswith(self._FWD_HELLO):
+            log.warning(
+                f"Unexpected handshake reply from {neighbour.bbs_callsign}: {reply!r}"
+            )
+            return False
+
+        remote_call = reply.split()[2] if len(reply.split()) >= 3 else neighbour.bbs_callsign
+        log.info(f"Forwarding session open with {remote_call}")
+
+        # Phase 1: offer our unsent bulletins to them
+        areas = neighbour.areas or None
+        outbound = self._bbs.get_unsent_bulletins_for(
+            neighbour.bbs_callsign,
+            areas=areas,
+            limit=20,
+        )
+        # Offer urgent bulletins first so they arrive with priority
+        outbound.sort(key=lambda r: (not r.get("is_urgent", 0), r.get("date", "")))
+        for row in outbound:
+            body = row["body"]
+            if isinstance(body, bytes):
+                size = len(body)
+            else:
+                size = len(body.encode("utf-8"))
+            send(
+                f"{self._FWD_OFFER} {row['id']} {row['area']} {size}"
+            )
+            ack = recv()
+            if ack and ack.startswith(self._FWD_GET):
+                # They want it — send it
+                self._send_bulletin(send, recv, row)
+                self._bbs.mark_seen(row["id"], neighbour.bbs_callsign)
+                self._bbs.log_forward(neighbour.bbs_callsign, "sent", row["id"])
+                log.info(f"Forwarded MID={row['id']} → {neighbour.bbs_callsign}")
+            elif ack is None:
+                log.warning(f"Forwarding to {neighbour.bbs_callsign}: no reply "
+                            f"to offer of {row['id']}")
+                return False
+            else:
+                # They already have it
+                self._bbs.mark_seen(row["id"], neighbour.bbs_callsign)
+
+        # Phase 2: ask them what they have for us
+        # The answering side sends its whole list, then FWD END, before it
+        # reads anything more, so collect the list before asking for any.
+        send(f"{self._FWD_GET} *")  # request their offer list
+        offers: list[tuple[str, str]] = []
+        while True:
+            line = recv()
+            if line is None or line.startswith(self._FWD_BYE):
+                break
+            if line.startswith(self._FWD_OFFER):
+                # "FWD OFFER <mid> <area> <size>": arguments follow the
+                # two-word command
+                parts = line.split()[2:]
+                if len(parts) >= 2:
+                    offers.append((parts[0], parts[1]))
+            elif line.startswith(self._FWD_END):
+                break
+
+        for their_mid, their_area in offers:
+            if self._should_accept(their_mid, their_area, neighbour):
+                send(f"{self._FWD_GET} {their_mid}")
+                self._receive_bulletin(send, recv, their_mid, neighbour)
+
+        send(self._FWD_BYE)
+        neighbour._last_forwarded_at = time.time()
+
+        self._bus.emit(
+            EventType.MESSAGE_RECEIVED,
+            data={"source": "forwarding", "neighbour": neighbour.bbs_callsign},
+        )
+        return True
 
     def _send_bulletin(self, send, recv, row):
         """Send a single bulletin to the neighbour.
@@ -758,7 +895,6 @@ class BulletinForwardingServer:
              - FWD GET <mid>                  → look up and send that bulletin via DATA
              - FWD BYE                        → end session
         """
-        fwd = BulletinForwarder(self._config, self._store, self._bbs, self._bus)
         conn.settimeout(30)
 
         def send(line: str):
@@ -780,12 +916,34 @@ class BulletinForwardingServer:
                 return None
 
         try:
+            self.serve(send, recv)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def serve(self, send, recv, expected_call: str = "") -> bool:
+        """Run the answering side of the forwarding protocol over any line
+        transport (a TCP connection, or an RF session from a neighbour).
+
+        ``expected_call``: on RF, the neighbour the caller was identified
+        as; a HELLO naming another BBS is refused.  Returns True when the
+        session ran to its end.
+        """
+        fwd = BulletinForwarder(self._config, self._store, self._bbs, self._bus)
+        try:
             # Receive their hello, reply with ours
             hello = recv()
             if not hello or not hello.startswith(BulletinForwarder._FWD_HELLO):
-                return
+                return False
             parts = hello.split()
             remote_call = parts[2] if len(parts) >= 3 else "UNKNOWN"
+            if expected_call and remote_call.upper().split("-")[0] != \
+                    expected_call.upper().split("-")[0]:
+                log.warning(f"Forwarding: HELLO from {remote_call} on a call "
+                            f"from {expected_call}; refused")
+                return False
 
             # Build a transient neighbour handle for this session
             class _SessionNeighbour:
@@ -807,9 +965,9 @@ class BulletinForwardingServer:
 
                 if line.startswith(BulletinForwarder._FWD_OFFER):
                     # ── They are offering a bulletin to us ────────────────
-                    oparts = line.split()
-                    if len(oparts) >= 3:
-                        their_mid, their_area = oparts[1], oparts[2]
+                    oparts = line.split()[2:]   # after "FWD OFFER"
+                    if len(oparts) >= 2:
+                        their_mid, their_area = oparts[0], oparts[1]
                         if fwd._should_accept(their_mid, their_area, neighbour):
                             send(f"{BulletinForwarder._FWD_GET} {their_mid}")
                             fwd._receive_bulletin(send, recv, their_mid, neighbour)
@@ -818,8 +976,8 @@ class BulletinForwardingServer:
 
                 elif line.startswith(BulletinForwarder._FWD_GET):
                     # ── They are requesting bulletin(s) from us ───────────
-                    gparts = line.split()
-                    requested_mid = gparts[1] if len(gparts) >= 2 else "*"
+                    gparts = line.split()[2:]   # after "FWD GET"
+                    requested_mid = gparts[0] if gparts else "*"
 
                     if requested_mid == "*":
                         # Send our offer list — all unsent bulletins for them
@@ -865,11 +1023,8 @@ class BulletinForwardingServer:
                     continue
 
             send(BulletinForwarder._FWD_BYE)
+            return True
 
         except Exception as e:
             log.error(f"Inbound forwarding session error: {e}", exc_info=True)
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            return False
