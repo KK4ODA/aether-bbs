@@ -1,7 +1,8 @@
 """
 vara/interface.py
 
-Low-level TCP interface to a single VARA FM or VARA HF instance.
+Low-level TCP interface to a single VARA FM, VARA HF or Aether HF instance
+(Aether HF answers on the same published VARA host interface).
 Maintains two socket connections:
   - cmd_sock  (port N+0): line-delimited command/event channel
   - data_sock (port N+1): raw byte stream for payload data
@@ -28,6 +29,32 @@ CONNECT_TIMEOUT  = 10   # seconds
 CONNECT_RETRIES  = 5
 RETRY_BASE_DELAY = 1.0  # seconds (exponential backoff)
 MAX_RETRY_DELAY  = 60.0
+
+
+def modem_label(cfg) -> str:
+    """Human name of the modem behind an instance, for log lines."""
+    if getattr(cfg, "is_aether", False):
+        return "Aether HF"
+    return "VARA HF" if getattr(cfg, "is_hf", False) else "VARA FM"
+
+
+def init_bandwidth(cfg) -> Optional[int]:
+    """The BW<n> to send at initialisation, or None to send none.
+
+    VARA HF always gets one (500, 2300 or 2750).  Aether HF gets one only
+    when aether.bandwidth asks for it: otherwise the station keeps its own
+    [radio] bandwidth, and still answers a narrower call at 500 Hz.
+    """
+    if getattr(cfg, "is_aether", False):
+        bw = getattr(getattr(cfg, "aether", None), "bandwidth", 0) or 0
+        return bw if bw in (500, 2300) else None
+    if not getattr(cfg, "is_hf", False):
+        return None
+    bw = getattr(cfg, "bandwidth", None) or 500
+    if bw not in (500, 2300, 2750):
+        log.warning(f"[{cfg.name}] Invalid HF bandwidth {bw}, defaulting to 2300")
+        bw = 2300
+    return bw
 
 
 class VARAFMState(Enum):
@@ -114,7 +141,7 @@ class VARAFMInterface:
                 self._cmd_sock.settimeout(30.0)
                 self._data_sock.settimeout(30.0)
                 log.info(
-                    f"[{self.cfg.name}] Connected to VARA {'HF' if getattr(self.cfg, 'is_hf', False) else 'FM'} "
+                    f"[{self.cfg.name}] Connected to {modem_label(self.cfg)} "
                     f"(cmd:{self.cfg.cmd_port} data:{self.cfg.data_port})"
                 )
                 self._set_state(VARAFMState.IDLE)
@@ -132,7 +159,13 @@ class VARAFMInterface:
                     self._stop_event.wait(timeout=delay)
                     delay = min(delay * 2, MAX_RETRY_DELAY)
 
-        log.error(f"[{self.cfg.name}] Could not connect to VARA FM after {CONNECT_RETRIES} attempts")
+        log.error(f"[{self.cfg.name}] Could not connect to {modem_label(self.cfg)} "
+                  f"after {CONNECT_RETRIES} attempts")
+        if getattr(self.cfg, "is_aether", False):
+            log.error(
+                f"[{self.cfg.name}] Is Aether HF running with 'Host programs' "
+                f"on (Setup step 5, port {self.cfg.cmd_port})?"
+            )
         self._set_state(VARAFMState.DISCONNECTED)
 
     def disconnect(self):
@@ -206,10 +239,14 @@ class VARAFMInterface:
 
         No WINLINK command is sent — VARA HF defaults to raw data mode
         which is correct for BBS operation.
+
+        Aether HF takes the same sequence.  Its MYCALL replaces the callsign
+        in Aether's own configuration while the BBS is attached, and until
+        LISTEN ON it answers no calls (Aether host interface spec §3).  BW is
+        sent only when aether.bandwidth asks for one.
         """
-        is_hf = getattr(self.cfg, "is_hf", False)
-        mode = "HF" if is_hf else "FM"
-        log.info(f"[{self.cfg.name}] Initialising VARA {mode} modem...")
+        mode = modem_label(self.cfg)
+        log.info(f"[{self.cfg.name}] Initialising {mode} modem...")
 
         # Reset init failure counter — _handle_event increments on WRONG
         self._init_wrong_count = 0
@@ -219,7 +256,7 @@ class VARAFMInterface:
             """Check if the TCP connection was lost during init."""
             if self._cmd_sock is None or self._state == VARAFMState.DISCONNECTED:
                 log.warning(
-                    f"[{self.cfg.name}] VARA {mode} init aborted — "
+                    f"[{self.cfg.name}] {mode} init aborted — "
                     f"TCP connection lost during initialisation"
                 )
                 self._in_init = False
@@ -247,16 +284,23 @@ class VARAFMInterface:
             return
 
         # 3. HF-specific: set bandwidth
-        if is_hf:
-            bw = getattr(self.cfg, "bandwidth", None) or 500
-            if bw not in (500, 2300, 2750):
-                log.warning(f"[{self.cfg.name}] Invalid HF bandwidth {bw}, defaulting to 2300")
-                bw = 2300
+        bw = init_bandwidth(self.cfg)
+        if bw:
             self.send_cmd(f"BW{bw}")
             time.sleep(1.0)
             if _aborted():
                 return
-            log.info(f"[{self.cfg.name}] VARA HF bandwidth set to {bw} Hz")
+            log.info(f"[{self.cfg.name}] {mode} bandwidth set to {bw} Hz")
+        elif getattr(self.cfg, "is_aether", False):
+            log.info(f"[{self.cfg.name}] Aether HF keeps its own bandwidth "
+                     f"(Setup step 4)")
+
+        # Aether HF names itself and its version in answer to VERSION
+        if getattr(self.cfg, "is_aether", False):
+            self.send_cmd("VERSION")
+            time.sleep(0.5)
+            if _aborted():
+                return
 
         # 4. Enable inbound connections
         self.send_cmd("LISTEN ON")
@@ -270,7 +314,7 @@ class VARAFMInterface:
         # Validate init outcome
         if self._init_wrong_count > 0:
             log.error(
-                f"[{self.cfg.name}] VARA {mode} init FAILED: "
+                f"[{self.cfg.name}] {mode} init FAILED: "
                 f"{self._init_wrong_count} command(s) rejected with WRONG. "
                 f"Modem may NOT be listening for connections!"
             )
@@ -279,11 +323,11 @@ class VARAFMInterface:
             # A future improvement would abort here.
         else:
             log.info(
-                f"[{self.cfg.name}] VARA {mode} init OK: all commands acknowledged"
+                f"[{self.cfg.name}] {mode} init OK: all commands acknowledged"
             )
 
         self._set_state(VARAFMState.LISTENING)
-        log.info(f"[{self.cfg.name}] VARA {mode} initialised, listening")
+        log.info(f"[{self.cfg.name}] {mode} initialised, listening")
 
     def _start_threads(self):
         for target, name in [
@@ -367,8 +411,7 @@ class VARAFMInterface:
 
         if upper.startswith("CONNECTED"):
             parts = event.split()
-            # VARA FM sends: "CONNECTED <remote_call> <local_call> [WIDE]"
-            remote = parts[1] if len(parts) >= 2 else "UNKNOWN"
+            remote = self._remote_from_connected(parts)
             self._remote_call = remote
             self._set_state(VARAFMState.CONNECTED)
             self._connected_event.set()
@@ -430,6 +473,34 @@ class VARAFMInterface:
                        "LINK REGISTERED", "UNENCRYPTED LINK", "ENCRYPTION DISABLED"):
             pass
 
+        elif upper == "MISSING SOUNDCARD":
+            log.error(
+                f"[{self.cfg.name}] {modem_label(self.cfg)} reports MISSING "
+                f"SOUNDCARD — it can neither hear nor transmit. Check the "
+                f"sound card in the modem's setup."
+            )
+
+        elif upper.startswith("VERSION "):
+            log.info(f"[{self.cfg.name}] Modem: {event[8:].strip()}")
+
+        elif upper.startswith("SN "):
+            try:
+                snr = float(event.split()[1])
+            except (IndexError, ValueError):
+                return
+            self._bus.emit(EventType.LINK_QUALITY, source=self.cfg.name,
+                           data={"snr_db": snr})
+
+        elif upper.startswith("BITRATE "):
+            # "BITRATE (<level>) <bps> BPS [TX|RX]"
+            nums = [t.strip("()") for t in event.split()[1:3]]
+            try:
+                level, bps = int(nums[0]), int(nums[1])
+            except (IndexError, ValueError):
+                return
+            self._bus.emit(EventType.LINK_QUALITY, source=self.cfg.name,
+                           data={"level": level, "bps": bps})
+
         elif upper == "WRONG":
             last = getattr(self, '_last_cmd', '?')
             if getattr(self, '_in_init', False):
@@ -438,8 +509,23 @@ class VARAFMInterface:
             else:
                 log.error(f"[{self.cfg.name}] VARA REJECTED command: '{last}' (WRONG)")
 
-        elif upper.startswith(("REGISTERED ", "SN ", "BITRATE ")):
+        elif upper.startswith(("REGISTERED ", "CQFRAME ")):
             pass
+
+    def _remote_from_connected(self, parts: list[str]) -> str:
+        """Pick the other station's callsign out of a CONNECTED line.
+
+        The published form is ``CONNECTED <caller> <called> [<bw>]``: the
+        caller comes first whichever side this is, so an inbound session
+        names the remote first and an outbound one names it second.  Take
+        the first callsign that is not this station's.
+        """
+        own = self.cfg.cfg_bbs_callsign().upper()
+        calls = [p for p in parts[1:3] if not p.isdigit()]
+        for c in calls:
+            if c.upper() != own:
+                return c
+        return calls[0] if calls else "UNKNOWN"
 
     def _handle_tcp_error(self):
         log.error(f"[{self.cfg.name}] TCP connection lost")
@@ -483,7 +569,7 @@ class VARAFMInterface:
                 jitter = random.uniform(0.3, 1.5)
                 time.sleep(jitter)
                 if not self._busy:
-                    cmd = f"CONNECT {remote_call}"
+                    cmd = f"CONNECT {self.cfg.cfg_bbs_callsign()} {remote_call}"
                     if path:
                         cmd += f" VIA {path}"
                     self.send_cmd(cmd)

@@ -1,5 +1,5 @@
 =====================================================================
-  VARA BBS — Push Notifications via ntfy
+  Aether BBS — Push Notifications via ntfy
 =====================================================================
 
 OVERVIEW
@@ -16,7 +16,7 @@ showing who sent the message and what it's about.
 
 WHAT YOU NEED
 -------------
-- This PC (where VARA BBS runs) — acts as the ntfy server
+- This PC (where Aether BBS runs) — acts as the ntfy server
 - A phone on the same WiFi network — receives notifications
 - The free "ntfy" app installed on your phone
 
@@ -49,21 +49,21 @@ SETUP (5 MINUTES)
   1. Tap the "+" button
   2. Tap "Use another server" (important!)
   3. Enter your PC's address:  http://<YOUR-PC-IP>:8080
-  4. For the topic, enter:     vara-bbs-alerts
+  4. For the topic, enter:     aether-bbs-alerts
   5. Tap Subscribe
 
   Replace <YOUR-PC-IP> with the IP shown by setup_ntfy.bat
   (typically something like 192.168.1.100).
 
 
-  Step 4: Enable in VARA BBS
+  Step 4: Enable in Aether BBS
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  In VARA BBS:
+  In Aether BBS:
 
   1. Go to Settings > Notifications
   2. Check "Enable push notifications via ntfy"
   3. Server URL should be: http://127.0.0.1:8080
-  4. Topic should be: vara-bbs-alerts
+  4. Topic should be: aether-bbs-alerts
   5. Click Save
 
 
@@ -98,7 +98,7 @@ TROUBLESHOOTING
      internet — see ntfy docs for "iOS instant notifications").
   5. On Android, make sure the ntfy app is excluded from battery
      optimization so it can receive messages in the background.
-  6. Check VARA BBS logs for "ntfy delivery failed" messages.
+  6. Check Aether BBS logs for "ntfy delivery failed" messages.
 
 
 MANUAL START / STOP
@@ -109,7 +109,8 @@ If the auto-start task doesn't work, you can:
   Stop:   Double-click tools\ntfy\stop_ntfy.bat
 
 To remove the auto-start task:
-  Open Task Scheduler and delete "VARA-BBS-ntfy"
+  Open Task Scheduler and delete "Aether-BBS-ntfy" (or "VARA-BBS-ntfy"
+  if it was set up before the rename to Aether BBS)
 
 
 ADVANCED: CHANGING THE PORT
@@ -117,7 +118,7 @@ ADVANCED: CHANGING THE PORT
 Edit tools\ntfy\server.yml and change the listen-http line:
   listen-http: ":9090"
 
-Then update the URL in both the VARA BBS settings and your
+Then update the URL in both the Aether BBS settings and your
 phone's subscription.
 
 

@@ -1,7 +1,7 @@
 """
 gui/theme.py
 
-Discord-inspired dark theme for VARA FM BBS.
+Discord-inspired dark theme for Aether BBS.
 Apply once at startup:  apply_theme(app)
 """
 

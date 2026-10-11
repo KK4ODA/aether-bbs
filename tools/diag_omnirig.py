@@ -1,7 +1,7 @@
 """
 diag_omnirig.py -- OmniRig diagnostic tool
 
-Run from a command prompt (close VARA BBS first):
+Run from a command prompt (close Aether BBS first):
     python diag_omnirig.py
 
 Reports OmniRig status, waits for the radio to come online,

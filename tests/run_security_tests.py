@@ -746,7 +746,7 @@ def test_thread_safety():
 
 def main():
     print("=" * 60)
-    print("  VARA BBS Security Tests — Phase 1 + Phase 2")
+    print("  Aether BBS Security Tests — Phase 1 + Phase 2")
     print("=" * 60)
 
     tests = [

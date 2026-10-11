@@ -18,6 +18,7 @@ from typing import Optional
 
 from core.config import AppConfig, ConfigManager
 from core.events import EventBus, EventType
+from core.version import get_version
 from vara.rigcontrol import _hour_in_range
 
 log = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class APRSGateway:
         )
         login = (
             f"user {call} pass {passcode} "
-            f"vers VARA-FM-BBS 1.0"
+            f"vers AetherBBS {get_version()}"
         )
         if cfg.is_filter:
             login += f" filter {cfg.is_filter}"
@@ -361,7 +362,7 @@ class APRSGateway:
         as 'BBS OFFLINE' appended to the station info panel.
 
         We use '!' here because:
-        1. This BBS is a VARA-FM BBS, not an APRS message relay.
+        1. This BBS is a Aether BBS, not an APRS message relay.
         2. No APRS message handler is implemented in this software.
         3. Declaring MSG-capability we cannot honour is a protocol lie that
            directly causes the 'BBS OFFLINE' symptom on aprs.fi.

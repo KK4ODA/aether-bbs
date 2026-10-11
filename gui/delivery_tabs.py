@@ -491,10 +491,10 @@ class SMTPProvidersTab:
         xf.addRow("Sender email:", self._sender_email)
 
         self._sender_name = QLineEdit()
-        self._sender_name.setPlaceholderText("VARA BBS")
+        self._sender_name.setPlaceholderText("Aether BBS")
         self._sender_name.setToolTip(
             "Display name shown to email recipients\n"
-            "(e.g. 'VARA BBS' or your callsign)."
+            "(e.g. 'Aether BBS' or your callsign)."
         )
         self._sender_name.textChanged.connect(self._on_field_changed)
         xf.addRow("Sender name:", self._sender_name)
@@ -829,12 +829,12 @@ class InboundEmailTab:
         rf.setSpacing(6)
 
         self.widgets["bbs_domain"] = QLineEdit(ie.bbs_domain)
-        self.widgets["bbs_domain"].setPlaceholderText("varabbs.example.com")
+        self.widgets["bbs_domain"].setPlaceholderText("aetherbbs.example.com")
         self.widgets["bbs_domain"].setToolTip(
             "The domain part of email addresses that map to BBS callsigns.\n\n"
             "Emails to callsign@this-domain are delivered to the matching\n"
             "RF user. Other domains are ignored.\n\n"
-            "Example:  kk4oda@varabbs.example.com → KK4ODA"
+            "Example:  kk4oda@aetherbbs.example.com → KK4ODA"
         )
         rf.addRow("BBS Domain:", self.widgets["bbs_domain"])
 

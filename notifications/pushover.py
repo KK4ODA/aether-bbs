@@ -58,7 +58,7 @@ class PushoverNotifier:
             log.warning("Pushover test skipped -- not enabled")
             return
         self._post(
-            title="VARA BBS - Test Notification",
+            title="Aether BBS - Test Notification",
             message="If you see this, Pushover notifications are working!",
             priority=0,  # normal for test
         )
@@ -78,7 +78,7 @@ class PushoverNotifier:
         phrase    = d.get("alert_phrase", "Priority message received")
         tactical  = d.get("tactical_callsign", to_call)
 
-        title = f"VARA BBS Alert - {tactical}"
+        title = f"Aether BBS Alert - {tactical}"
         body_lines = [
             phrase,
             "",

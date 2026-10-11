@@ -77,7 +77,7 @@ _CONNECT_BANNER = (
     " +--------------------------------------------------+\r\n"
     " |   ___   ___   ___                                |\r\n"
     " |  | _ ) | _ ) / __|                               |\r\n"
-    " |  | _ \\ | _ \\ \\__ \\   V A R A  B B S              |\r\n"
+    " |  | _ \\ | _ \\ \\__ \\   A E T H E R  B B S          |\r\n"
     " |  |___/ |___/ |___/                               |\r\n"
     " |                                                  |\r\n"
     " |  Station : {bbs_call:<14}  Grid : {grid:<8}       |\r\n"
@@ -364,7 +364,7 @@ class InteractiveSession:
         self._send(
             "\r\n"
             " +--------------------------------------------------+\r\n"
-            " |   VARA BBS -- Access Restricted                  |\r\n"
+            " |   Aether BBS -- Access Restricted                  |\r\n"
             " +--------------------------------------------------+\r\n"
             "\r\n"
             f"Hello {self.remote_call}.\r\n"

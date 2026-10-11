@@ -1,5 +1,5 @@
 @echo off
-:: VARA BBS — Stop ntfy server
+:: Aether BBS — Stop ntfy server
 
 echo Stopping ntfy server ...
 taskkill /im ntfy.exe /f >nul 2>&1

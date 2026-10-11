@@ -4,6 +4,9 @@ core/updater.py
 Git-based auto-updater.  Fetches from origin, compares HEAD with the
 remote tracking branch, and (optionally) pulls + restarts.
 
+Aether HF is a separate application with its own signed updater, so it is
+not updated from here.
+
 Works with or without an EventBus (terminal mode passes ``None``).
 """
 
@@ -34,8 +37,6 @@ class UpdateCheckResult:
     current_hash: str = ""
     remote_hash: str = ""
     commits: list[CommitSummary] = field(default_factory=list)
-    aether_update_available: bool = False
-    aether_commits: list[CommitSummary] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -44,7 +45,6 @@ class UpdateApplyResult:
     success: bool = False
     old_hash: str = ""
     new_hash: str = ""
-    aether_updated: bool = False
     error: Optional[str] = None
 
 
@@ -162,30 +162,9 @@ class Updater:
                 result.update_available = True
                 result.commits = self._parse_log(f"HEAD..origin/{branch}")
 
-            # Optionally check AETHER submodule
-            if self._config.include_aether:
-                aether_dir = self._repo / "aether_hf_modem"
-                if (aether_dir / ".git").exists() or (self._repo / ".gitmodules").exists():
-                    try:
-                        self._run_git("fetch", "origin", cwd=aether_dir)
-                        local = self._run_git("rev-parse", "--short", "HEAD", cwd=aether_dir)
-                        remote = self._run_git("rev-parse", "--short", "origin/master", cwd=aether_dir)
-                        if local != remote:
-                            result.aether_update_available = True
-                            result.aether_commits = self._parse_log(
-                                f"HEAD..origin/master", cwd=aether_dir,
-                            )
-                    except GitError as e:
-                        log.warning("AETHER submodule check failed: %s", e)
-
-            if result.update_available or result.aether_update_available:
+            if result.update_available:
                 self._emit(EventType.UPDATE_AVAILABLE, result)
-                log.info(
-                    "Update available: %d new commit(s)%s",
-                    len(result.commits),
-                    f", AETHER: {len(result.aether_commits)} commit(s)"
-                    if result.aether_update_available else "",
-                )
+                log.info("Update available: %d new commit(s)", len(result.commits))
             else:
                 log.info("Software is up to date (%s)", result.current_hash)
 
@@ -203,7 +182,7 @@ class Updater:
 
     # ── apply ───────────────────────────────────────────────────────────
 
-    def apply_update(self, include_aether: bool = False) -> UpdateApplyResult:
+    def apply_update(self) -> UpdateApplyResult:
         """Pull the latest commits.  Returns result — never raises."""
         result = UpdateApplyResult()
         branch = self._config.branch
@@ -224,19 +203,6 @@ class Updater:
             self._run_git("pull", "--ff-only", "origin", branch)
             result.new_hash = self._run_git("rev-parse", "--short", "HEAD")
             result.success = True
-
-            # AETHER submodule
-            if include_aether:
-                aether_dir = self._repo / "aether_hf_modem"
-                if aether_dir.exists():
-                    try:
-                        self._run_git(
-                            "submodule", "update", "--remote", "aether_hf_modem",
-                        )
-                        result.aether_updated = True
-                        log.info("AETHER HF submodule updated")
-                    except GitError as e:
-                        log.warning("AETHER submodule update failed: %s", e)
 
             self._emit(EventType.UPDATE_COMPLETE, result)
             log.info("Updated %s → %s", result.old_hash, result.new_hash)

@@ -58,7 +58,7 @@ class InboundEmailConfig(BaseModel):
     username:            str        = ""
     password:            str        = ""
     folder:              str        = "INBOX"
-    bbs_domain:          str        = ""       # e.g. "varabbs.example.com"
+    bbs_domain:          str        = ""       # e.g. "aetherbbs.example.com"
     poll_interval:       int        = Field(default=5, ge=1, le=1440)  # minutes
     delete_after_fetch:  bool       = False
     max_message_size:    int        = Field(default=50000, ge=1000, le=500000)

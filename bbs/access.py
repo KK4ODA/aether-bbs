@@ -1,7 +1,7 @@
 """
 bbs/access.py
 
-Centralized access control for the VARA BBS.
+Centralized access control for the Aether BBS.
 
 Determines what a callsign is allowed to do based on their role in the
 access_control table.  All authorization decisions flow through this class.

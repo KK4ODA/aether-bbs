@@ -2,7 +2,7 @@
 """
 tools/test_forwarding.py
 
-Loopback forwarding test harness for VARA BBS.
+Loopback forwarding test harness for Aether BBS.
 
 Simulates a remote neighbour BBS so the sysop can exercise the full
 bulletin forwarding protocol without deploying a second BBS instance.
@@ -371,7 +371,7 @@ def interactive_menu(sock, our_call: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Loopback forwarding test harness for VARA BBS",
+        description="Loopback forwarding test harness for Aether BBS",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("Usage")[0],
     )

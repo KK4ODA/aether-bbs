@@ -1,27 +1,37 @@
-# VARA BBS
+# Aether BBS
 
-Amateur radio bulletin board system with multi-transport support (VARA FM/HF, Soundmodem AX.25, AETHER HF), Winlink integration, APRS, multi-user chat, and multi-tier message delivery.
+Amateur radio bulletin board system for VARA FM, VARA HF, [Aether HF](https://github.com/KK4ODA/aether-hf)
+and AX.25 packet, with Winlink integration, APRS, multi-user chat, and multi-tier message
+delivery.
+
+> **Formerly VARA BBS.** The program was renamed when it gained first-class support for
+> Aether HF, the open-source HF modem. VARA FM and VARA HF are supported exactly as before.
+> Upgrading? See [Upgrading from VARA BBS](#upgrading-from-vara-bbs).
 
 ## Features
 
-### Transport
-- **Multi-transport architecture**: VARA FM, VARA HF, Soundmodem (AGWPE/KISS), and AETHER HF
-- Each instance configurable as one transport type (not mixed)
-- Multi-instance modem management with per-instance PTT and rig control
-- Transport auto-detection protocol (`;TRANSPORT?` query for terminal apps)
-- HF PTT control via OmniRig, FLrig, Hamlib, CM108, or serial (RTS/DTR)
-- HF frequency scanning with time-of-day filtering
+### Transports
+- **VARA FM** and **VARA HF** over VARA's TCP host interface
+- **Aether HF**, the open-source HF modem: sessions over its VARA-compatible host interface,
+  plus its control API for status, faults, signal reports and heard stations on the dashboard
+  ([guide](docs/AETHER_HF.md))
+- **Soundmodem / Direwolf** AX.25 packet over AGWPE (KISS is planned)
+- One transport per instance; run several instances side by side, each on its own ports
+- Per-instance PTT for VARA HF (and Aether HF in host-keyed mode): OmniRig, FLrig, Hamlib,
+  CM108, or serial RTS/DTR
+- HF frequency scanning through OmniRig with time-of-day filtering
+- `;TRANSPORT?` query: a terminal client can ask which transport it reached
 
 ### BBS
-- Interactive BBS sessions with message store (SQLite)
+- Interactive BBS sessions with an SQLite message store
 - Bulletin board with configurable areas and inter-BBS forwarding
 - File storage and transfer with role-based access and virus scanning
-- MHeard station log
+- MHeard station log (Aether HF's heard stations are added to it)
 
 ### Winlink
-- Winlink CMS integration via Pat client (https://getpat.io)
-- On-demand CMS polling (sysop via GUI, RF users via `WL` command)
-- Per-user Winlink mail forwarding (WLREG with encrypted password exchange)
+- Winlink CMS integration via [Pat](https://getpat.io)
+- On-demand CMS polling (sysop via GUI, RF users via the `WL` command)
+- Per-user Winlink mail forwarding (`WLREG` with encrypted password exchange)
 - Winlink passwords encrypted at rest using PBKDF2-derived keys
 - Outbound delivery engine (Winlink primary, SMTP fallback, inbound email polling)
 
@@ -37,10 +47,12 @@ Amateur radio bulletin board system with multi-transport support (VARA FM/HF, So
 - Role-based access control: SYSOP, TRUSTED, APPROVED, PENDING, UNKNOWN, BLOCKED
 - Operational modes: restricted, open, emcomm
 - Rate limiting and auto-block on auth failures
-- All passwords encrypted at rest (BBS passwords, Winlink passwords, gateway credentials)
+- Secrets encrypted at rest (BBS passwords, Winlink passwords, gateway credentials,
+  Aether HF control tokens)
 
 ### Notifications
-- Push notifications via ntfy (self-hosted, no internet required)
+- Push notifications via ntfy (self-hosted, no internet required) — see
+  [`tools/ntfy/README_NOTIFICATIONS.txt`](tools/ntfy/README_NOTIFICATIONS.txt)
 - Pushover (iOS/Android mobile push)
 - SMS via USB GSM modem (AT commands)
 - Configurable event triggers (new registrations, urgent bulletins, priority messages)
@@ -50,56 +62,119 @@ Amateur radio bulletin board system with multi-transport support (VARA FM/HF, So
 - Internet connectivity monitoring with automatic notifications
 - PyQt6 GUI with dashboard, message viewer, settings, packet monitor, and log viewer
 - TOML configuration with automatic migration and corrupt-config recovery
+- Git-based self-update (Settings → Updates)
 
 ## Quick Start
 
-1. Install dependencies: `pip install -r requirements.txt`
-2. Install Pat for Winlink: https://getpat.io
-3. Run: `python main.py` (or double-click `start_bbs.bat`)
-4. Configure your station callsign and transport settings in the GUI
+1. Install Python 3.11 or later, then the dependencies: `pip install -r requirements.txt`
+2. Install your modem: VARA FM/HF, [Aether HF](https://github.com/KK4ODA/aether-hf/releases),
+   or Soundmodem/Direwolf
+3. Install [Pat](https://getpat.io) if you want Winlink
+4. Run `python main.py` (or double-click `start_bbs.bat` on Windows)
+5. Set your station callsign, then add an instance per modem under **Settings → Instances**
+
+The configuration lives at:
+
+| OS | Path |
+|---|---|
+| Windows | `%APPDATA%\aether-bbs\aether_bbs.toml` |
+| macOS | `~/Library/Application Support/aether-bbs/aether_bbs.toml` |
+| Linux | `~/.config/aether-bbs/aether_bbs.toml` |
+
+Messages, files and logs (`logs/aether_bbs.log`) are kept relative to the folder the BBS runs
+from.
 
 ## Transport Configuration
 
-Each instance is configured with one transport type in the TOML config:
+Each instance has one transport. The GUI writes these for you; by hand they look like:
 
 ```toml
 [[instances]]
 name = "VHF"
 transport = "VARA_FM"       # VARA_FM, VARA_HF, SOUNDMODEM, or AETHER_HF
 enabled = true
-
-# VARA FM/HF settings
-cmd_port = 8300
+cmd_port = 8300             # modem command port; data port is cmd_port + 1
 data_port = 8301
 
-# Soundmodem settings (when transport = "SOUNDMODEM")
+[[instances]]
+name = "HF-VARA"
+transport = "VARA_HF"
+cmd_port = 8310
+data_port = 8311
+bandwidth = 2300            # 500, 2300 or 2750
+[instances.ptt]
+method = "OMNIRIG"          # VOX, RTS, DTR, DTRRTS, HAMLIB, CM108, OMNIRIG, FLRIG
+
+[[instances]]
+name = "HF-Aether"
+transport = "AETHER_HF"
+cmd_port = 8320             # must match Aether's "Host programs" port (8300 by default)
+data_port = 8321
+auto_start = true           # launch Aether HF if it is not running
+[instances.aether]
+control_port = 8515         # Aether's control API
+bandwidth = 0               # 0 = Aether's own setting; or 500 / 2300
+
+[[instances]]
+name = "Packet"
+transport = "SOUNDMODEM"
 [instances.soundmodem]
-protocol = "AGWPE"          # AGWPE or KISS
+protocol = "AGWPE"
 host = "127.0.0.1"
 port = 8000
-
-# AETHER HF settings (when transport = "AETHER_HF")
-[instances.aether]
-cmd_port = 8400
-data_port = 8401
-mode = "wide"               # wide, narrow, or emergency
 ```
 
-## Terminal App
+Ports must be unique across enabled instances.
 
-A companion terminal client lives in `terminal/` for connecting to the BBS via any supported transport. The terminal auto-detects the BBS transport type using the `;TRANSPORT?` protocol query.
+## Aether HF
+
+Aether HF is installed and set up on its own: its Setup tab owns the rules the station runs
+under, the radio, keying and sound card. Turn on **Host programs** (Setup step 5, port 8300)
+so the BBS can attach. The BBS then sets `MYCALL` to the BBS callsign, answers calls, and shows
+Aether's state, bandwidth, dial, SNR and the rules' verdict on the instance card, with a
+warning for anything that would stop it working. Aether HF stations talk only to other Aether
+stations on the air; an Aether BBS must never be listed as a VARA gateway.
+
+Full setup, keying options, remote daemons and troubleshooting: [docs/AETHER_HF.md](docs/AETHER_HF.md).
+
+## Upgrading from VARA BBS
+
+Nothing needs to be done by hand:
+
+- On first start, Aether BBS copies `vara-fm-bbs/vara_fm_bbs.toml` to
+  `aether-bbs/aether_bbs.toml` in the same parent folder. The old file is left where it was.
+- The beacon text and welcome message are renamed only if they were still at the old
+  defaults. Your ntfy topic is kept, so phones stay subscribed.
+- The main log is now `logs/aether_bbs.log`; older logs stay as `vara_fm_bbs.log`.
+- An Aether HF instance from the prototype era (`[instances.aether] cmd_port = 8400`) has its
+  ports moved to the instance's `cmd_port`/`data_port`. Point it at the port Aether's
+  *Host programs* setting uses (8300 by default).
+- Re-running `tools/ntfy/setup_ntfy.bat` replaces the `VARA-BBS-ntfy` task with
+  `Aether-BBS-ntfy`.
+- APRS-IS logins now identify the software as `AetherBBS <version>`.
+
+## Tests
+
+```bash
+python -m pytest tests
+```
+
+`tests/test_aether.py` runs the BBS against a fake `aetherd` (host interface and control API),
+so it needs no radio or Aether installation. `tools/vara_simulator.py` simulates an RF caller
+for manual testing.
 
 ## Related Projects
 
-- [AETHER HF](https://github.com/KK4ODA/aether-hf) — Open-source HF modem protocol (alternative to VARA HF)
+- [Aether HF](https://github.com/KK4ODA/aether-hf) — open-source HF data modem with a
+  VARA-compatible host interface
 - [Pat](https://getpat.io) — Winlink client used for CMS integration
 
 <!-- tota-support:start -->
 ## Support
 
-VARA BBS is free and stays free. It is written by KK4ODA, who also runs
+Aether BBS is free and stays free. It is written by KK4ODA, who also runs
 [Tiles on the Air](https://tilesontheair.com), a free program for portable
-operators, and both are kept going by the people who use them. If VARA BBS is
+operators, and both are kept going by the people who use them. If Aether BBS is
 useful to you, a contribution through the
 [Tiles on the Air giving page](https://tilesontheair.com/Giving) helps keep this tool and Tiles
 running. Nothing is ever locked behind it, and a bug report or an on-air

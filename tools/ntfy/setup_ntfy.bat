@@ -2,11 +2,11 @@
 setlocal EnableDelayedExpansion
 
 REM =====================================================================
-REM VARA BBS — ntfy Server Setup
+REM Aether BBS — ntfy Server Setup
 REM =====================================================================
 
 set "VER=2.17.0"
-set "TASK=VARA-BBS-ntfy"
+set "TASK=Aether-BBS-ntfy"
 
 REM Use delayed expansion for all paths to survive (parentheses) and spaces
 set "D=%~dp0"
@@ -15,7 +15,7 @@ set "YML=!D!server.yml"
 
 echo.
 echo ============================================
-echo   VARA BBS - ntfy Push Notification Setup
+echo   Aether BBS - ntfy Push Notification Setup
 echo ============================================
 echo.
 
@@ -89,6 +89,9 @@ goto done
 echo.
 echo [4/4] Creating auto-start task "!TASK!" ...
 
+REM Remove the task created under the old VARA BBS name, if present
+schtasks /query /tn "VARA-BBS-ntfy" >nul 2>&1
+if !errorlevel!==0 schtasks /delete /tn "VARA-BBS-ntfy" /f >nul 2>&1
 schtasks /query /tn "!TASK!" >nul 2>&1
 if !errorlevel!==0 schtasks /delete /tn "!TASK!" /f >nul 2>&1
 
@@ -123,9 +126,9 @@ echo.
 echo   2. Open the app, tap "+"
 echo.
 echo   3. Subscribe to:
-echo      http://!LAN_IP!:8080/vara-bbs-alerts
+echo      http://!LAN_IP!:8080/aether-bbs-alerts
 echo.
-echo   4. In VARA BBS: Settings, Notifications, Enable
+echo   4. In Aether BBS: Settings, Notifications, Enable
 echo.
 echo   5. Click "Send Test Notification" to verify
 echo.
