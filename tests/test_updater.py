@@ -47,16 +47,20 @@ def _zip(files: dict[str, str], root="KK4ODA-aether-bbs-abc1234") -> bytes:
 
 
 def _install(tmp_path, version="1.2.0") -> Path:
+    """A ZIP install.  Files are written as exact bytes, as unpacked from a
+    release ZIP (write_text would turn \\n into \\r\\n on Windows)."""
     d = tmp_path / "install"
-    (d / "core").mkdir(parents=True)
-    (d / "messages").mkdir()
-    (d / "files" / "GENERAL").mkdir(parents=True)
-    (d / "VERSION").write_text(version + "\n")
-    (d / "main.py").write_text("print('old')\n")
-    (d / "core" / "a.py").write_text("A = 1\n")
-    (d / "requirements.txt").write_bytes(b"PyQt6\r\n")   # as saved on Windows
-    (d / "messages" / "bbs.db").write_text("station data")
-    (d / "files" / "GENERAL" / "readme.txt").write_text("sysop edited")
+    files = {
+        "VERSION": version + "\n",
+        "main.py": "print('old')\n",
+        "core/a.py": "A = 1\n",
+        "requirements.txt": "PyQt6\r\n",          # as saved by a Windows editor
+        "messages/bbs.db": "station data",
+        "files/GENERAL/readme.txt": "sysop edited",
+    }
+    for name, text in files.items():
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(text.encode())
     return d
 
 
