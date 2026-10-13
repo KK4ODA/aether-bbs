@@ -75,11 +75,14 @@ class UpdateDialog(QDialog):
             notes.setPlainText("No release notes were published.")
         layout.addWidget(notes, 1)
 
-        how = ("Your git copy will be moved to the new release."
-               if r.install_kind == "git" else
-               "The new version is downloaded from GitHub and installed over this "
-               "folder.  Replaced files are kept in backups\\.  Your settings, "
-               "messages and files are not touched.")
+        how = {
+            "git": "Your git copy will be moved to the new release.",
+            "installer": "The new version's installer is downloaded from GitHub and "
+                         "run.  Your settings, messages and files are not touched.",
+        }.get(r.install_kind,
+              "The new version is downloaded from GitHub and installed over this "
+              "folder.  Replaced files are kept in backups\\.  Your settings, "
+              "messages and files are not touched.")
         info = QLabel(how + "  Aether BBS restarts when it is done.")
         info.setWordWrap(True)
         info.setStyleSheet("color:#b5bac1;")
@@ -157,6 +160,13 @@ class UpdateDialog(QDialog):
 
     def _on_apply_done(self, result):
         self._progress.hide()
+        if result.success and result.manual_step:
+            # macOS: the sysop drags the new app into Applications
+            self._status.setStyleSheet("color:#57f287;")
+            self._set_status(result.manual_step)
+            self._later_btn.setText("Close")
+            self._later_btn.setEnabled(True)
+            return
         if result.success:
             msg = f"Updated {result.old_hash} → {result.new_hash}."
             if result.warning:
@@ -168,7 +178,11 @@ class UpdateDialog(QDialog):
                 self._status.setStyleSheet("color:#57f287;")
                 self._set_status(msg + "  Restarting ...")
                 delay = 1500
-            QTimer.singleShot(delay, self._restart)
+            if not result.relaunch:
+                self._set_status(f"Downloaded {result.new_hash}.  The installer finishes "
+                                 "the update and starts Aether BBS again.  Closing ...")
+            relaunch = result.relaunch
+            QTimer.singleShot(delay, lambda: self._restart(relaunch=relaunch))
         else:
             self._status.setStyleSheet("color:#ed4245;")
             self._set_status(f"Update failed: {result.error}")

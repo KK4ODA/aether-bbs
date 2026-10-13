@@ -5,6 +5,10 @@ name: Release
 # (Actions → Release → Run workflow), which tags the commit with the version in
 # VERSION.  The notes come from docs/release-notes/<tag>.md, or are generated
 # from the PRs if that file is missing.
+#
+# The release is created as a draft, the Windows, macOS and Linux installers
+# are built and attached (installers.yml), and only then is it published, so
+# nobody is offered a release whose installers are still being built.
 
 on:
   push:
@@ -17,6 +21,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,4 +60,21 @@ jobs:
           else
             set -- --generate-notes
           fi
-          gh release create "$TAG" --title "Aether BBS $TAG" --target "$GITHUB_SHA" "$@"
+          gh release create "$TAG" --title "Aether BBS $TAG" --target "$GITHUB_SHA" --draft "$@"
+
+  installers:
+    needs: release
+    uses: ./.github/workflows/installers.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      sha: ${{ github.sha }}
+
+  publish:
+    needs: [release, installers]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"

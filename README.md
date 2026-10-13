@@ -70,12 +70,28 @@ delivery.
 
 ## Quick Start
 
-1. Install Python 3.11 or later, then the dependencies: `pip install -r requirements.txt`
+1. Download the installer for your computer from the
+   [latest release](https://github.com/KK4ODA/aether-bbs/releases/latest):
+
+   | Computer | File | How |
+   |---|---|---|
+   | Windows 10/11 (64-bit) | `AetherBBS-<version>-windows-setup.exe` | Run it. It installs for you alone, with no administrator prompt, unless you choose all users. |
+   | Mac (Apple silicon) | `AetherBBS-<version>-macos.dmg` | Open it and drag **Aether BBS** into Applications. |
+   | Linux (x86-64) | `AetherBBS-<version>-linux-x86_64.tar.gz` | Unpack it in a folder you own and run `AetherBBS/AetherBBS`. `AetherBBS/install-desktop-entry.sh` adds it to your application menu. |
+
+   No Python is needed. The installers are not code-signed yet, so the first start shows a
+   warning: on Windows click **More info → Run anyway**; on a Mac open
+   **System Settings → Privacy & Security** and click **Open Anyway**. Linux needs
+   `libxcb-cursor0` (Debian/Ubuntu) or `xcb-util-cursor` (Fedora/Arch) for the window.
 2. Install your modem: VARA FM/HF, [Aether HF](https://github.com/KK4ODA/aether-hf/releases),
    or Soundmodem/Direwolf
 3. Install [Pat](https://getpat.io) if you want Winlink
-4. Run `python main.py` (or double-click `start_bbs.bat` on Windows)
-5. Set your station callsign, then add an instance per modem under **Settings → Instances**
+4. Start Aether BBS, set your station callsign, then add an instance per modem under
+   **Settings → Instances**
+
+**From source** instead: install Python 3.11 or later, run
+`pip install -r requirements.txt`, then `python main.py` (or double-click `start_bbs.bat` on
+Windows).
 
 The configuration lives at:
 
@@ -85,8 +101,9 @@ The configuration lives at:
 | macOS | `~/Library/Application Support/aether-bbs/aether_bbs.toml` |
 | Linux | `~/.config/aether-bbs/aether_bbs.toml` |
 
-Messages, files and logs (`logs/aether_bbs.log`) are kept relative to the folder the BBS runs
-from.
+An installed copy keeps its messages, files and logs (`logs/aether_bbs.log`) in that same
+folder; they stay there when you uninstall. Run from source, they are kept in the source
+folder.
 
 ## Updating
 
@@ -94,7 +111,11 @@ At startup Aether BBS asks GitHub whether a newer release is out. If one is, it 
 and offers **Update now**, **Remind me later** or **Skip this version**. Update now installs the
 release and restarts the BBS:
 
-- **Downloaded ZIP:** the release is downloaded and copied over the BBS folder. Every file it
+- **Installed copy:** the release's installer for your computer is downloaded. On Windows it
+  runs silently once the BBS has closed and then starts the new version; on Linux the new app
+  folder replaces the old one and the BBS restarts; on a Mac the disk image opens for you to
+  drag the new app into Applications.
+- **Source ZIP:** the release is downloaded and copied over the BBS folder. Every file it
   replaces is saved first under `backups/update-v<old>-<date>/`, and if the copy fails part-way
   the old files are put back. `messages/`, `files/`, `logs/` and `backups/` are never
   overwritten, and the settings in your profile folder are not touched.
@@ -106,7 +127,9 @@ Updates has **Check for Updates**, the startup check, a periodic check, and for 
 choice of every change on `master` instead of releases only.
 
 Versions before 1.3.0 can only update a git clone. If you installed 1.2.0 or earlier from a ZIP,
-download the next release by hand once; after that it updates itself.
+download the next release by hand once; after that it updates itself. Moving from a source copy
+to an installer is a fresh install: your settings carry over, and you can copy `messages/` and
+`files/` from the source folder into the profile folder above to keep them.
 
 ## Transport Configuration
 

@@ -730,7 +730,7 @@ class MainWindow(QMainWindow):
         dlg = UpdateDialog(
             check_result,
             self._updater,
-            self._restart_callback or (lambda: None),
+            self._restart_callback or (lambda **_: None),
             parent=self,
             on_skip=self._skip_update_version,
             active_sessions=len(self._active_sessions),

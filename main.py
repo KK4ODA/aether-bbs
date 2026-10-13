@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
 from core.config import ConfigManager
+from core.paths import install_dir
 from core.logging_manager import setup_logging, update_vara_cmd_logging
 from core.events import EventBus, EventType
 from vara.instance_manager import ModemInstanceManager
@@ -275,7 +276,7 @@ class BBSApplication:
         # --- Software updater ---
         from core.updater import Updater
         self.updater = Updater(
-            repo_dir=Path(__file__).resolve().parent,
+            repo_dir=install_dir(),
             event_bus=self.event_bus,
             config=self.config.updater,
         )
@@ -331,13 +332,19 @@ class BBSApplication:
             if self.rate_limiter and self.mode_policy:
                 self.rate_limiter.multiplier = self.mode_policy.rate_limit_multiplier
 
-    def restart(self):
-        """Graceful restart: shut down all subsystems, then re-launch."""
+    def restart(self, relaunch: bool = True):
+        """Graceful restart: shut down all subsystems, then re-launch.
+
+        relaunch=False just quits: an installer the updater started brings
+        the new version up itself."""
         log.info("Restart requested — shutting down for update")
         self._shutdown()
-        import subprocess as _sp
-        args = [sys.executable] + sys.argv
-        _sp.Popen(args)
+        if relaunch:
+            import subprocess as _sp
+            from core.paths import is_frozen
+            # A built app's sys.argv[0] is the program itself
+            args = [sys.executable] + (sys.argv[1:] if is_frozen() else sys.argv)
+            _sp.Popen(args)
         QApplication.instance().quit()
 
     def _shutdown(self):
@@ -372,7 +379,53 @@ class BBSApplication:
             log.error(f"Error during shutdown: {e}")
 
 
+def self_test() -> int:
+    """``--self-test``: load every part of the BBS and its GUI, then exit.
+
+    The installer builds run this to catch modules PyInstaller left out."""
+    import importlib
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from core.version import get_version
+    packages = {
+        "aether": "aprs control launcher monitor websocket",
+        "aprs": "gateway",
+        "ax25": "parser router",
+        "bbs": "access b2f bulletins converse dispatcher filestore interactive "
+               "mode_policy rate_limiter store",
+        "core": "config crypto events logging_manager paths updater util version",
+        "delivery": "backends config engine inbound models",
+        "gui": "aether_heard bbs_panel bulletins_tab chat_window delivery_tabs "
+               "files_tab log_viewer mainwindow message_viewer messages_tab "
+               "modem_panel packet_monitor session_sounds settings theme "
+               "update_dialog winlink_panel",
+        "notifications": "ntfy pushover sms",
+        "transport": "agwpe agwpe_broker protocol",
+        "vara": "broker flrig instance_manager interface mux omnirig process ptt "
+                "rigcontrol",
+        "winlink": "notify pat_client queue",
+    }
+    for pkg, names in packages.items():
+        for name in names.split():
+            importlib.import_module(f"{pkg}.{name}")
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    from gui.theme import apply_theme
+    apply_theme(app)
+    version = get_version()
+    if version == "0.0.0":
+        raise SystemExit("VERSION file missing from the build")
+    print(f"Aether BBS {version} self-test OK")
+    return 0
+
+
 def main():
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
+
+    # Installed copies keep messages, files and logs in the profile folder
+    from core.paths import prepare_data_dir
+    prepare_data_dir()
+
     # High-DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -387,6 +440,12 @@ def main():
     from gui.theme import apply_theme
     apply_theme(app)
 
+    from core.paths import resource_dir
+    icon = resource_dir() / "packaging" / "aether-bbs.png"
+    if icon.is_file():
+        from PyQt6.QtGui import QIcon
+        app.setWindowIcon(QIcon(str(icon)))
+
     bbs_app = BBSApplication()
     sys.exit(bbs_app.start(app))
 
@@ -396,7 +455,8 @@ if __name__ == "__main__":
         main()
     except Exception as _crash:
         import traceback
-        crash_path = Path(__file__).parent / "crash.log"
+        from core.paths import data_dir
+        crash_path = data_dir() / "crash.log"
         with open(crash_path, "w") as _f:
             traceback.print_exc(file=_f)
         # Also try to show a message box if Qt is alive
