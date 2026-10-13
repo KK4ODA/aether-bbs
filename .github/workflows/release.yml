@@ -1,12 +1,15 @@
 name: Release
 
-# Pushing a tag like v1.3.0 publishes a GitHub release for it.  The notes come
-# from docs/release-notes/<tag>.md, or are generated from the PRs if that file
-# is missing.  The installed BBS offers the latest release to the sysop.
+# Publishes a GitHub release; the installed BBS offers the latest one to the
+# sysop.  Either push a tag like v1.3.0, or run this workflow by hand on master
+# (Actions → Release → Run workflow), which tags the commit with the version in
+# VERSION.  The notes come from docs/release-notes/<tag>.md, or are generated
+# from the PRs if that file is missing.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,22 +20,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check VERSION matches the tag
+      - name: Work out the tag
+        id: tag
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           ver="$(tr -d '[:space:]' < VERSION)"
-          if [ "$tag" != "$ver" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION ($ver)"
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            tag="$GITHUB_REF_NAME"
+            if [ "${tag#v}" != "$ver" ]; then
+              echo "::error::Tag $tag does not match VERSION ($ver)"
+              exit 1
+            fi
+          else
+            if [ "$GITHUB_REF_NAME" != "master" ]; then
+              echo "::error::Run the release from master, not $GITHUB_REF_NAME"
+              exit 1
+            fi
+            tag="v$ver"
           fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          notes="docs/release-notes/${GITHUB_REF_NAME}.md"
-          if [ -f "$notes" ]; then
-            gh release create "$GITHUB_REF_NAME" --title "Aether BBS $GITHUB_REF_NAME" --notes-file "$notes" --verify-tag
-          else
-            gh release create "$GITHUB_REF_NAME" --title "Aether BBS $GITHUB_REF_NAME" --generate-notes --verify-tag
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; bump VERSION first"
+            exit 1
           fi
+          notes="docs/release-notes/${TAG}.md"
+          if [ -f "$notes" ]; then
+            set -- --notes-file "$notes"
+          else
+            set -- --generate-notes
+          fi
+          gh release create "$TAG" --title "Aether BBS $TAG" --target "$GITHUB_SHA" "$@"
