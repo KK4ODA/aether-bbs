@@ -9,7 +9,7 @@ import sys
 import shutil
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from datetime import datetime
 
 try:
@@ -425,10 +425,15 @@ class SecurityConfig(BaseModel):
 
 
 class UpdaterConfig(BaseModel):
-    """Software auto-update settings (git-based)."""
+    """Software update settings."""
     check_on_startup:           bool = True
     auto_check_interval_hours:  int  = Field(default=0, ge=0, le=168)  # 0 = startup only
+    # "release": offer published releases.  "latest": a git clone follows
+    # every commit on `branch` (ZIP installs always use releases).
+    channel:                    Literal["release", "latest"] = "release"
     branch:                     str  = "master"
+    repo:                       str  = "KK4ODA/aether-bbs"
+    skipped_version:            str  = ""    # "Skip this version" in the prompt
 
 
 class AppConfig(BaseModel):

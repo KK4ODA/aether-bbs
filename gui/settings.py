@@ -3323,6 +3323,23 @@ class SettingsTab(QScrollArea):
         )
         form.addRow("Auto-check interval:", self._upd_interval)
 
+        self._upd_channel = QComboBox()
+        self._upd_channel.addItem("Releases only (recommended)", "release")
+        self._upd_channel.addItem("Every change on GitHub (git copies only)", "latest")
+        self._upd_channel.setCurrentIndex(
+            max(0, self._upd_channel.findData(cfg.channel)))
+        self._upd_channel.setToolTip(
+            "Releases are tested versions.  'Every change' follows the "
+            "development branch and only works for a git clone.")
+        form.addRow("Offer:", self._upd_channel)
+
+        if cfg.skipped_version:
+            self._upd_unskip = QCheckBox(
+                f"Ask again about v{cfg.skipped_version} (currently skipped)")
+            form.addRow("", self._upd_unskip)
+        else:
+            self._upd_unskip = None
+
         return w
 
     def _on_check_updates(self):
@@ -3335,13 +3352,15 @@ class SettingsTab(QScrollArea):
         from core.updater import Updater
         from pathlib import Path
 
+        win = self.window()
+        updater = getattr(win, "_updater", None) or Updater(
+            repo_dir=Path(__file__).resolve().parent.parent,
+            event_bus=self._bus,
+            config=self._config.updater,
+        )
+
         def _check():
-            updater = Updater(
-                repo_dir=Path(__file__).resolve().parent.parent,
-                event_bus=self._bus,
-                config=self._config.updater,
-            )
-            result = updater.check_for_updates()
+            result = updater.check_for_updates(manual=True)
             # Schedule GUI update on main thread via QTimer
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(0, lambda: self._on_check_result(result))
@@ -3354,13 +3373,15 @@ class SettingsTab(QScrollArea):
             self._upd_status.setText(f"Error: {result.error}")
             self._upd_status.setStyleSheet("color:#ed4245;")
         elif result.update_available:
-            n = len(result.commits)
-            self._upd_status.setText(
-                f"{n} new commit(s) available!  Use the status bar indicator to update."
-            )
+            what = (f"v{result.latest_version}" if result.release
+                    else f"{len(result.commits)} new change(s)")
+            self._upd_status.setText(f"{what} available.")
             self._upd_status.setStyleSheet("color:#57f287;")
+            show = getattr(self.window(), "_show_update_dialog", None)
+            if show:
+                show(result)
         else:
-            self._upd_status.setText("Up to date.")
+            self._upd_status.setText(f"Up to date (v{result.current_version}).")
             self._upd_status.setStyleSheet("color:#57f287;")
 
     def _save(self):
@@ -3619,7 +3640,12 @@ class SettingsTab(QScrollArea):
             updater=UpdaterConfig(
                 check_on_startup=self._upd_check_startup.isChecked(),
                 auto_check_interval_hours=self._upd_interval.value(),
+                channel=self._upd_channel.currentData() or "release",
                 branch=self._config.updater.branch,
+                repo=self._config.updater.repo,
+                skipped_version=(
+                    "" if self._upd_unskip is not None and self._upd_unskip.isChecked()
+                    else (self._cm.current() or self._config).updater.skipped_version),
             ),
             instances=instances,
         )
