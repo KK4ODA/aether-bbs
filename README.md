@@ -30,6 +30,7 @@ delivery.
   (VARA FM, VARA HF or Aether HF)
 - File storage and transfer with role-based access and virus scanning
 - MHeard station log (Aether HF's heard stations are added to it)
+- Aether HF stations-heard table on the dashboard, with each station's last and best SNR
 
 ### Winlink
 - Winlink CMS integration via [Pat](https://getpat.io)

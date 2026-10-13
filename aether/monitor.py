@@ -8,7 +8,9 @@ GUI shows on the instance card (EventType.AETHER_STATUS).  It logs, once
 per change, the conditions that keep a BBS from working: the host interface
 switched off, a sound card or keying fault, no regulatory profile chosen,
 or the station not answering calls.  It also feeds stations Aether has heard
-(beacons, calls, probes, datagrams) into the BBS's MHeard log.
+(beacons, calls, probes, datagrams) into the BBS's MHeard log, and publishes
+Aether's whole stations-heard list, with SNR, for the dashboard
+(EventType.AETHER_HEARD).
 """
 
 import logging
@@ -21,7 +23,7 @@ from core.events import EventBus, EventType
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 5.0
-HEARD_EVERY_N_POLLS = 6          # heard.list every ~30 s
+HEARD_EVERY_N_POLLS = 2          # heard.list every ~10 s
 
 
 def summarize_status(st: dict) -> dict:
@@ -58,6 +60,49 @@ def summarize_status(st: dict) -> dict:
         "mismatch":      (bw.get("mismatch") or {}).get("sentence", ""),
         "mismatch_what": (bw.get("mismatch") or {}).get("what", ""),
     }
+
+
+# Aether HF's own words for what a station was last doing (its Stations tab).
+ACTIVITY_TEXT = {
+    "beacon": "beacon",
+    "calling": "calling",
+    "probing": "probing",
+    "answering": "answering",
+    "connected": "session",
+    "datagram": "KISS frame",
+}
+
+
+def _num(value):
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def heard_rows(stations: list[dict]) -> list[dict]:
+    """Reduce ``heard.list`` entries to what the dashboard shows."""
+    rows = []
+    for st in stations:
+        call = str(st.get("callsign", "")).upper()
+        if not call:
+            continue
+        activity = str(st.get("activity", ""))
+        rows.append({
+            "callsign":       call,
+            "snr_db":         _num(st.get("snr_db")),
+            "best_snr_db":    _num(st.get("best_snr_db")),
+            "last_heard_ms":  int(st.get("last_heard_ms") or 0),
+            "first_heard_ms": int(st.get("first_heard_ms") or 0),
+            "frequency_hz":   _num(st.get("frequency_hz")),
+            "bandwidth_hz":   st.get("bandwidth_hz"),
+            "activity":       ACTIVITY_TEXT.get(activity, activity),
+            "detail":         str(st.get("detail") or ""),
+            "count":          int(st.get("count") or 0),
+            "beacons":        int(st.get("beacons") or 0),
+            "connected":      bool(st.get("connected", False)),
+        })
+    return rows
 
 
 def problems(summary: dict) -> list[str]:
@@ -157,6 +202,8 @@ class AetherMonitor:
             stations = self._client.heard()
         except AetherControlError:
             return
+        self._bus.emit(EventType.AETHER_HEARD, source=self._name,
+                       data={"stations": heard_rows(stations)})
         for st in stations:
             call = str(st.get("callsign", "")).upper()
             last = int(st.get("last_heard_ms") or 0)

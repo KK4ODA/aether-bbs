@@ -30,6 +30,7 @@ class EventType(Enum):
     BUFFER_UPDATE       = auto()   # BUFFER n bytes queued
     LINK_QUALITY        = auto()   # SN <dB> / BITRATE from the modem
     AETHER_STATUS       = auto()   # Aether HF control-API status summary
+    AETHER_HEARD        = auto()   # Aether HF stations-heard list (with SNR)
     DATA_TX             = auto()   # text/data sent to remote station
     DATA_RX             = auto()   # text/data received from remote station
 

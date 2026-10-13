@@ -23,6 +23,7 @@ from core.events import EventBus, EventType
 from vara.instance_manager import ModemInstanceManager
 from vara.process import ProcessState
 from gui.theme import STATE_COLORS
+from gui.aether_heard import AetherHeardPanel
 
 log = logging.getLogger(__name__)
 
@@ -329,8 +330,14 @@ class InstanceCard(QGroupBox):
             return
         call, ok = QInputDialog.getText(
             self, "Probe a station", "Callsign to probe:")
+        if ok:
+            self.probe(call)
+
+    def probe(self, call: str):
+        """Ask *call* whether it hears us; the answer shows on this card."""
         call = call.strip().upper()
-        if ok and call:
+        client = self._aether_client() if call else None
+        if client is not None:
             self._run_aether_action(f"Probe {call}", lambda: client.probe(call))
 
     def _on_beacon(self):
@@ -443,6 +450,12 @@ class ModemStatusPanel(QScrollArea):
                 self._cards[inst_cfg.name] = card
                 layout.addWidget(card)
 
+        # ── Aether HF stations heard (with SNR) ──────────────────────
+        self._aether_heard = AetherHeardPanel(container)
+        self._aether_heard.probe_requested.connect(self._on_probe_requested)
+        self._aether_heard.setVisible(self._has_aether_monitor())
+        layout.addWidget(self._aether_heard)
+
         # ── Recently Heard Stations ──────────────────────────────────
         if self._store:
             heard_group = QGroupBox("Recently Heard Stations")
@@ -496,6 +509,7 @@ class ModemStatusPanel(QScrollArea):
         self._bus.subscribe(EventType.SCAN_FREQ_CHANGED,    self._on_scan_freq)
         self._bus.subscribe(EventType.LINK_QUALITY,         self._on_link_quality)
         self._bus.subscribe(EventType.AETHER_STATUS,        self._on_aether_status)
+        self._bus.subscribe(EventType.AETHER_HEARD,         self._on_aether_heard)
 
     def _on_config_changed(self, event):
         new_cfg = (event.data or {}).get("config")
@@ -519,19 +533,15 @@ class ModemStatusPanel(QScrollArea):
             card.deleteLater()
         self._cards.clear()
 
-        # Remove the trailing stretch so we can re-add cards before it
-        # (stretch is the last item)
-        stretch_item = layout.itemAt(layout.count() - 1)
-        if stretch_item and stretch_item.spacerItem():
-            layout.removeItem(stretch_item)
-
-        # Add cards for all enabled instances
+        # Re-add cards right after the title, above the heard tables
+        pos = 1
         for inst_cfg in self._config.instances:
             if inst_cfg.enabled:
                 card = InstanceCard(inst_cfg.name, self._im,
                                     inst_cfg=inst_cfg, parent=container)
                 self._cards[inst_cfg.name] = card
-                layout.addWidget(card)
+                layout.insertWidget(pos, card)
+                pos += 1
 
                 # Restore live state from the instance manager
                 status = self._im.get_status(inst_cfg.name)
@@ -545,7 +555,9 @@ class ModemStatusPanel(QScrollArea):
                     if status.current_call:
                         card.on_session_connected(status.current_call)
 
-        layout.addStretch()
+        self._aether_heard.keep_instances(
+            [i.name for i in self._config.instances if i.enabled and i.is_aether])
+        self._aether_heard.setVisible(self._has_aether_monitor())
         log.info(f"Modem panel rebuilt — {len(self._cards)} instance card(s)")
 
     # Event callbacks run in background threads → use invokeMethod pattern
@@ -678,6 +690,24 @@ class ModemStatusPanel(QScrollArea):
             from PyQt6.QtCore import QMetaObject, Q_ARG
             QMetaObject.invokeMethod(card, "on_process_state",
                 Qt.ConnectionType.QueuedConnection, Q_ARG(str, "STOPPED"))
+
+    # ── Aether HF stations heard ──────────────────────────────────────
+
+    def _has_aether_monitor(self) -> bool:
+        return any(i.enabled and i.is_aether and i.aether.monitor
+                   for i in self._config.instances)
+
+    def _on_aether_heard(self, event):
+        from PyQt6.QtCore import QMetaObject, Q_ARG
+        QMetaObject.invokeMethod(
+            self._aether_heard, "set_stations", Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, event.source or ""),
+            Q_ARG(str, json.dumps(event.data or {}, default=str)))
+
+    def _on_probe_requested(self, instance: str, call: str):
+        card = self._cards.get(instance)
+        if card:
+            card.probe(call)
 
     # ── Heard stations ────────────────────────────────────────────────
 
