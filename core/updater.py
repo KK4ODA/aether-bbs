@@ -465,7 +465,9 @@ class Updater:
                     if dst.read_bytes() == src.read_bytes():
                         continue
                     if rel.as_posix() == "requirements.txt":
-                        reqs_changed = True
+                        # Line endings alone (CRLF on Windows) are not a change.
+                        reqs_changed = (dst.read_bytes().splitlines()
+                                        != src.read_bytes().splitlines())
                     (backup / rel).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(dst, backup / rel)
                     replaced.append(rel)

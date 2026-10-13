@@ -54,7 +54,7 @@ def _install(tmp_path, version="1.2.0") -> Path:
     (d / "VERSION").write_text(version + "\n")
     (d / "main.py").write_text("print('old')\n")
     (d / "core" / "a.py").write_text("A = 1\n")
-    (d / "requirements.txt").write_text("PyQt6\n")
+    (d / "requirements.txt").write_bytes(b"PyQt6\r\n")   # as saved on Windows
     (d / "messages" / "bbs.db").write_text("station data")
     (d / "files" / "GENERAL" / "readme.txt").write_text("sysop edited")
     return d
