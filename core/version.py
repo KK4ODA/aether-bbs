@@ -11,8 +11,10 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+from core.paths import resource_dir
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_VERSION_FILE = _REPO_ROOT / "VERSION"
+_VERSION_FILE = resource_dir() / "VERSION"
 
 
 def get_version() -> str:

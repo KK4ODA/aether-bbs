@@ -8,7 +8,12 @@ with the VERSION file, and (when the sysop agrees) installs it:
 * any other install (the release ZIP unpacked into a folder) is updated by
   downloading the release ZIP and copying it over the install folder.  Files
   it replaces are backed up under ``backups/`` first and put back if the copy
-  fails part-way.  Messages, files, logs and backups are never overwritten.
+  fails part-way.  Messages, files, logs and backups are never overwritten;
+* an installed copy (an installer build, ``sys.frozen``) downloads the
+  release's installer for its platform: on Windows the setup runs silently
+  once the BBS has quit and starts the new version; on Linux the new app
+  folder replaces the old one; on macOS the disk image is opened for the
+  sysop to drag the app into Applications.
 
 On the "latest" channel a git clone follows every commit on its branch
 instead of releases only.
@@ -21,6 +26,7 @@ Works with or without an EventBus (terminal mode passes ``None``).
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -36,6 +42,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Optional
 
 from core.events import EventBus, EventType
+from core.paths import is_frozen
 from core.version import get_version
 
 log = logging.getLogger(__name__)
@@ -68,6 +75,7 @@ class ReleaseInfo:
     url: str = ""               # release page
     zip_url: str = ""
     published_at: str = ""
+    assets: dict = field(default_factory=dict)   # file name → download URL
 
 
 @dataclass
@@ -90,6 +98,8 @@ class UpdateApplyResult:
     old_hash: str = ""          # old version / commit
     new_hash: str = ""          # new version / commit
     warning: Optional[str] = None
+    relaunch: bool = True       # False: an installer starts the new version
+    manual_step: Optional[str] = None   # the sysop finishes it (macOS)
     error: Optional[str] = None
 
 
@@ -123,6 +133,27 @@ def parse_version(text: str) -> tuple:
 
 def is_newer(candidate: str, current: str) -> bool:
     return parse_version(candidate) > parse_version(current)
+
+
+# ── Installer builds ────────────────────────────────────────────────────────
+
+def installer_suffix(platform: Optional[str] = None) -> str:
+    """The end of this platform's installer file name on a release."""
+    platform = platform or sys.platform
+    if platform == "win32":
+        return "-windows-setup.exe"
+    if platform == "darwin":
+        return "-macos.dmg"
+    return "-linux-x86_64.tar.gz"
+
+
+def installer_asset(rel: "ReleaseInfo", platform: Optional[str] = None):
+    """(name, url) of the release's installer for this platform, or None."""
+    want = f"AetherBBS-{rel.version}{installer_suffix(platform)}"
+    for name, url in rel.assets.items():
+        if name == want:
+            return name, url
+    return None
 
 
 # ── Updater ─────────────────────────────────────────────────────────────────
@@ -255,6 +286,9 @@ class Updater:
             zip_url=str(data.get("zipball_url")
                         or f"https://api.github.com/repos/{repo}/zipball/{tag}"),
             published_at=str(data.get("published_at") or ""),
+            assets={str(a.get("name")): str(a.get("browser_download_url"))
+                    for a in (data.get("assets") or [])
+                    if a.get("name") and a.get("browser_download_url")},
         )
 
     # ── emit helper ─────────────────────────────────────────────────────
@@ -275,7 +309,10 @@ class Updater:
 
         try:
             self._emit(EventType.UPDATE_CHECK_STARTED)
-            result.install_kind = "git" if self._is_git_repo() else "zip"
+            if is_frozen():
+                result.install_kind = "installer"
+            else:
+                result.install_kind = "git" if self._is_git_repo() else "zip"
 
             if result.install_kind == "git" and self._cfg("channel", "release") == "latest":
                 self._check_git_branch(result)
@@ -284,6 +321,11 @@ class Updater:
                 result.release = rel
                 result.latest_version = rel.version
                 result.update_available = is_newer(rel.version, result.current_version)
+                if (result.update_available and result.install_kind == "installer"
+                        and not installer_asset(rel)):
+                    result.update_available = False
+                    result.error = (f"Aether BBS {rel.version} is out, but its installer "
+                                    "for this computer is not on the release yet.")
 
             if result.update_available:
                 self._emit(EventType.UPDATE_AVAILABLE, result)
@@ -340,6 +382,8 @@ class Updater:
             self._emit(EventType.UPDATE_STARTED)
             if check.install_kind == "git":
                 self._apply_git(check, result, say)
+            elif check.install_kind == "installer":
+                self._apply_installer(check, result, say)
             else:
                 self._apply_zip(check, result, say)
             result.success = True
@@ -413,6 +457,98 @@ class Updater:
 
         if reqs_changed:
             result.warning = self._install_requirements(say)
+
+    def _apply_installer(self, check: UpdateCheckResult, result: UpdateApplyResult, say):
+        rel = check.release
+        asset = installer_asset(rel) if rel else None
+        if not asset:
+            raise UpdateError("This release has no installer for this computer")
+        name, url = asset
+        result.old_hash = f"v{check.current_version}"
+        result.new_hash = f"v{rel.version}"
+
+        say(f"Downloading {name} ...")
+        folder = Path(tempfile.gettempdir()) / "aether-bbs-update"
+        folder.mkdir(parents=True, exist_ok=True)
+        package = folder / name
+        package.write_bytes(self._http_get(url, accept="*/*"))
+
+        if sys.platform == "win32":
+            say("Starting the installer ...")
+            self._run_windows_setup(package, folder)
+            result.relaunch = False
+        elif sys.platform == "darwin":
+            dest = Path.home() / "Downloads" / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(package, dest)
+            subprocess.Popen(["open", str(dest)])
+            result.manual_step = (
+                f"The Aether BBS {rel.version} disk image is open.  Quit Aether BBS, "
+                "drag the new Aether BBS into Applications (replace the old one), "
+                "then start it again.")
+        else:
+            say("Installing ...")
+            self._replace_linux_app(package)
+
+    def _run_windows_setup(self, setup: Path, folder: Path):
+        """Run the setup silently after this process exits, then start the
+        new version.  A small batch file waits for the BBS to quit so the
+        installer can replace its files."""
+        exe = Path(sys.executable)
+        script = folder / "run-update.cmd"
+        script.write_text(
+            "@echo off\r\n"
+            ":wait\r\n"
+            f'tasklist /FI "PID eq {os.getpid()}" 2>nul | find "{os.getpid()}" >nul '
+            # ping, not timeout: timeout fails without a console
+            "&& (ping -n 2 127.0.0.1 >nul & goto wait)\r\n"
+            f'"{setup}" /SILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL\r\n'
+            f'start "" "{exe}"\r\n',
+            encoding="utf-8")
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+            subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags,
+                         close_fds=True, cwd=str(folder))
+
+    def _replace_linux_app(self, archive: Path):
+        """Swap the files of the app folder for the release's (Linux)."""
+        import tarfile
+        target = self._repo
+        if not os.access(target, os.W_OK):
+            raise UpdateError(
+                f"{target} is not writable by you.  Unpack the new release there "
+                "by hand, or install Aether BBS in a folder you own.")
+        with tempfile.TemporaryDirectory(prefix="aether-bbs-update-") as tmp:
+            with tarfile.open(archive) as tf:
+                for m in tf.getmembers():
+                    p = PurePosixPath(m.name)
+                    if p.is_absolute() or ".." in p.parts or m.issym() and (
+                            PurePosixPath(m.linkname).is_absolute()
+                            or ".." in PurePosixPath(m.linkname).parts):
+                        raise UpdateError("The download contains an unsafe path")
+                if hasattr(tarfile, "data_filter"):
+                    tf.extractall(tmp, filter="data")
+                else:
+                    tf.extractall(tmp)
+            roots = [d for d in Path(tmp).iterdir()]
+            if len(roots) != 1 or not (roots[0] / "AetherBBS").is_file():
+                raise UpdateError("The download is not an Aether BBS Linux build")
+            new_root = roots[0]
+            for src in sorted(new_root.rglob("*")):
+                if src.is_dir() and not src.is_symlink():
+                    continue
+                dst = target / src.relative_to(new_root)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                staged = dst.with_name(dst.name + ".new")
+                if src.is_symlink():
+                    if staged.exists() or staged.is_symlink():
+                        staged.unlink()
+                    os.symlink(os.readlink(src), staged)
+                else:
+                    shutil.copy2(src, staged)
+                # rename over the old file: works even for the running program
+                os.replace(staged, dst)
 
     @staticmethod
     def _read(path: Path) -> bytes:

@@ -3350,11 +3350,11 @@ class SettingsTab(QScrollArea):
 
         import threading
         from core.updater import Updater
-        from pathlib import Path
+        from core.paths import install_dir
 
         win = self.window()
         updater = getattr(win, "_updater", None) or Updater(
-            repo_dir=Path(__file__).resolve().parent.parent,
+            repo_dir=install_dir(),
             event_bus=self._bus,
             config=self._config.updater,
         )
