@@ -115,6 +115,14 @@ it. Datagrams wait while a session is up.
 it, the card shows *Update required* with Aether's sentence naming which station must update.
 The two cannot connect until then.
 
+**Stations heard.** The dashboard's *Aether HF — Stations Heard* table shows Aether's own
+list, refreshed about every 10 seconds: each station's last and best SNR, when it was last
+heard, what it was doing (beacon, calling, probing, answering, session, KISS frame) and whom
+it was calling, its dial and bandwidth, and how often it was heard. Click a column to sort;
+hover over a callsign for when it was first heard and whether a session has been up with it;
+right-click it to **Probe** it. With two Aether HF instances an *Instance* column says which
+one heard it. The table needs *Show Aether HF status* (`monitor = true`).
+
 **MHeard.** Stations Aether hears (beacons, calls, probes, datagrams, sessions) are added to
 the BBS's heard list under the instance's name.
 
