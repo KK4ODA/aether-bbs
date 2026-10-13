@@ -280,6 +280,11 @@ class BBSApplication:
             config=self.config.updater,
         )
         self.main_window.set_updater(self.updater, restart_callback=self.restart)
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            lambda e: (e.data or {}).get("config") and
+                      self.updater.update_config((e.data or {})["config"].updater),
+        )
         if self.config.updater.check_on_startup:
             self.updater.check_once_async()
         if self.config.updater.auto_check_interval_hours > 0:

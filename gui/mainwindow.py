@@ -266,6 +266,7 @@ class MainWindow(QMainWindow):
         self._status_bar.addPermanentWidget(self._update_label)
         self._updater = None          # set later via set_updater()
         self._pending_update = None   # latest UpdateCheckResult
+        self._prompted_versions: set[str] = set()   # auto-prompted this run
 
         # Scan status indicator — permanent widget on the far right.
         self._scan_label = QLabel("")
@@ -689,19 +690,50 @@ class MainWindow(QMainWindow):
 
     def _on_update_available(self, check_result):
         self._pending_update = check_result
-        n = len(check_result.commits)
-        self._update_label.setText(f"UPDATE ({n})")
+        ver = check_result.latest_version
+        if ver and ver != check_result.current_version:
+            self._update_label.setText(f"UPDATE v{ver}")
+        else:
+            self._update_label.setText(f"UPDATE ({len(check_result.commits)})")
         self._update_label.show()
 
-    def _show_update_dialog(self):
-        if not self._updater or not self._pending_update:
+        # Ask the sysop right away (once per version per run), unless they
+        # asked to skip this version or pressed "Check for Updates" in
+        # Settings, which opens its own dialog.
+        if check_result.manual:
+            return
+        key = ver or check_result.remote_hash
+        if key in self._prompted_versions:
+            return
+        cfg = self._cm.current() or self._config
+        if ver and check_result.release and ver == cfg.updater.skipped_version:
+            log.info("Update %s available but skipped by the sysop", ver)
+            return
+        self._prompted_versions.add(key)
+        QTimer.singleShot(0, self._show_update_dialog)
+
+    def _skip_update_version(self, version: str):
+        cfg = self._cm.current() or self._config
+        cfg = cfg.model_copy(update={
+            "updater": cfg.updater.model_copy(update={"skipped_version": version})})
+        try:
+            self._cm.save(cfg)
+            log.info("Sysop skipped update %s", version)
+        except Exception as e:
+            log.error("Could not save skipped update version: %s", e)
+
+    def _show_update_dialog(self, check_result=None):
+        check_result = check_result or self._pending_update
+        if not self._updater or not check_result:
             return
         from gui.update_dialog import UpdateDialog
         dlg = UpdateDialog(
-            self._pending_update,
+            check_result,
             self._updater,
             self._restart_callback or (lambda: None),
             parent=self,
+            on_skip=self._skip_update_version,
+            active_sessions=len(self._active_sessions),
         )
         dlg.exec()
 

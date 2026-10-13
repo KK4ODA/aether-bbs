@@ -65,7 +65,7 @@ delivery.
 - Internet connectivity monitoring with automatic notifications
 - PyQt6 GUI with dashboard, message viewer, settings, packet monitor, and log viewer
 - TOML configuration with automatic migration and corrupt-config recovery
-- Git-based self-update (Settings → Updates)
+- Self-update: asks at startup when a new release is out, then installs it and restarts
 
 ## Quick Start
 
@@ -86,6 +86,26 @@ The configuration lives at:
 
 Messages, files and logs (`logs/aether_bbs.log`) are kept relative to the folder the BBS runs
 from.
+
+## Updating
+
+At startup Aether BBS asks GitHub whether a newer release is out. If one is, it shows what's new
+and offers **Update now**, **Remind me later** or **Skip this version**. Update now installs the
+release and restarts the BBS:
+
+- **Downloaded ZIP:** the release is downloaded and copied over the BBS folder. Every file it
+  replaces is saved first under `backups/update-v<old>-<date>/`, and if the copy fails part-way
+  the old files are put back. `messages/`, `files/`, `logs/` and `backups/` are never
+  overwritten, and the settings in your profile folder are not touched.
+- **git clone:** the copy is fast-forwarded to the release tag. Your own edits to tracked
+  files stop the update until you commit or stash them.
+
+If the new release needs new Python packages, they are installed with pip. Settings → About &
+Updates has **Check for Updates**, the startup check, a periodic check, and for a git clone a
+choice of every change on `master` instead of releases only.
+
+Versions before 1.3.0 can only update a git clone. If you installed 1.2.0 or earlier from a ZIP,
+download the next release by hand once; after that it updates itself.
 
 ## Transport Configuration
 
