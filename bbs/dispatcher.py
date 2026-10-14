@@ -501,6 +501,7 @@ class SessionDispatcher:
             send_raw_fn=handler.send_bytes,
             set_raw_mode=handler.set_raw_mode,
             bulletin_store=self._bbs,
+            remote_call=remote_call,
         )
         session.run(first_line=first_line)
         # Send DISCONNECT so VARA (or the simulator) issues a DISCONNECTED

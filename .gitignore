@@ -42,3 +42,7 @@ Thumbs.db
 
 # Claude session data
 .claude/
+
+# Test coverage data
+.coverage
+htmlcov/

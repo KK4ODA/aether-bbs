@@ -92,28 +92,6 @@ if errorlevel 1 (
     echo.
 )
 
-:: -- Check pytest (dev dependency) --------------------------------------------
-python -m pytest --version >nul 2>&1
-if errorlevel 1 (
-    echo  [WARNING] pytest is not installed. Tests will not be available.
-    echo  Would you like to install pytest now? [Y/N]
-    set /p PYTEST_CHOICE="  > "
-    if /i "!PYTEST_CHOICE!"=="Y" (
-        echo.
-        echo  Installing pytest...
-        python -m pip install pytest
-        if errorlevel 1 (
-            echo  [ERROR] Failed to install pytest. You can install it manually:
-            echo    python -m pip install pytest
-        ) else (
-            echo  pytest installed successfully.
-        )
-    ) else (
-        echo  Skipping pytest installation. Tests will not be available.
-    )
-    echo.
-)
-
 if !MISSING!==1 (
     echo.
     echo  One or more required packages are missing.
@@ -122,11 +100,11 @@ if !MISSING!==1 (
     if /i "!INSTALL_CHOICE!"=="Y" (
         echo.
         echo  Installing dependencies...
-        python -m pip install PyQt6 pydantic tomli tomli-w pyserial
+        python -m pip install PyQt6 pydantic tomli-w pyserial
         if errorlevel 1 (
             echo.
             echo  [ERROR] pip install failed. Please run manually:
-            echo    python -m pip install PyQt6 pydantic tomli tomli-w pyserial
+            echo    python -m pip install PyQt6 pydantic tomli-w pyserial
             pause
             exit /b 1
         )

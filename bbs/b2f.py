@@ -42,8 +42,13 @@ class B2FSession:
         send_raw_fn:   Callable[[bytes], None]  = None,
         set_raw_mode:  Callable[[bool], None]   = None,
         bulletin_store: "BulletinStore | None"  = None,
+        remote_call:   Optional[str]            = None,
     ):
         self.bbs_callsign    = bbs_callsign
+        # The station the RF link identified (and the session authenticated).
+        # Whose mail is sent is decided by this, never by the callsign the
+        # client types in its banner.
+        self._link_call = remote_call
         self.store           = store
         self.bulletin_store  = bulletin_store
         self._send         = send_fn
@@ -72,7 +77,14 @@ class B2FSession:
                 log.warning("B2F: no client banner received")
                 return False
 
-            self.remote_callsign = self._parse_callsign(client_banner)
+            banner_call = self._parse_callsign(client_banner)
+            if self._link_call:
+                self.remote_callsign = self._link_call.split("-")[0].upper()
+                if banner_call != self.remote_callsign:
+                    log.info(f"B2F: banner says {banner_call!r}; using the link's "
+                             f"{self.remote_callsign}")
+            else:
+                self.remote_callsign = banner_call
             log.info(f"B2F session with {self.remote_callsign}")
 
             # Challenge / response

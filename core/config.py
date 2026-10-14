@@ -12,10 +12,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 from datetime import datetime
 
-try:
-    import tomllib          # stdlib Python 3.11+
-except ImportError:
-    import tomli as tomllib  # backport for 3.9/3.10
+import tomllib   # stdlib; Aether BBS needs Python 3.11+
 
 import tomli_w
 from pydantic import BaseModel, Field, field_validator, model_validator
