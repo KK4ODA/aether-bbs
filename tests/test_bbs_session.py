@@ -59,6 +59,18 @@ class Session:
                 break
         return "".join(self.out[mark:])
 
+    def expect(self, line, *texts, timeout=10):
+        """Send *line*; wait until the reply contains one of *texts*."""
+        mark = len(self.out)
+        self.s.feed_line(line)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            got = "".join(self.out[mark:])
+            if any(t in got for t in texts):
+                return got
+            time.sleep(0.05)
+        raise AssertionError(f"no {texts!r} after {line!r}; got {got!r}")
+
     def close(self):
         self.s.feed_line(None)
         self.t.join(timeout=5)
@@ -195,16 +207,17 @@ class SecuredSession(Session):
         self.t.start()
         time.sleep(0.3)
         if password:
-            assert ";AUTH OK" in self.cmd(password)
+            self.expect(password, ";AUTH OK")
+            self.cmd("")            # let the login banner finish
 
 
 def _post(u, group="ALL"):
-    out = u.cmd(f"SB {group}")
-    if "denied" in out.lower() or "too many" in out.lower():
+    out = u.expect(f"SB {group}", "Subject:", "denied", "too many")
+    if "Subject:" not in out:
         return out
-    u.cmd("subject")
-    u.cmd("body")
-    return out + u.cmd(".")
+    u.expect("subject", "Message")
+    u.s.feed_line("body")
+    return out + u.expect(".", "Bulletin saved")
 
 
 @pytest.mark.parametrize("mode,may_post", [("emcomm", False), ("restricted", True),
@@ -240,10 +253,10 @@ def test_emcomm_limits_how_many_messages_a_station_sends(bbs):
                        password="secret")
     try:
         for _ in range(5):
-            u.cmd("S N0RF")
-            u.cmd("s")
-            u.cmd(".")
-        assert "too many messages" in u.cmd("S N0RF")
+            u.expect("S N0RF", "Subject:")
+            u.expect("s", "Message")
+            u.expect(".", "Message saved")
+        assert "too many messages" in u.expect("S N0RF", "too many", "Subject:")
         assert len(store.list_messages(to_call="N0RF")) == 5
     finally:
         u.close()
