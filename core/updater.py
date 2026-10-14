@@ -189,7 +189,13 @@ class Updater:
         return self._repo
 
     def update_config(self, config):
+        old_hours = getattr(self._config, "auto_check_interval_hours", 0)
         self._config = config
+        if config.auto_check_interval_hours != old_hours:
+            # a new check interval: replace the periodic loop (0 = none)
+            self._stop_event.set()
+            self._thread = None
+            self.start_periodic_check()
 
     def local_version(self) -> str:
         """The VERSION of the copy in repo_dir."""
@@ -673,19 +679,21 @@ class Updater:
         interval = self._config.auto_check_interval_hours
         if interval <= 0:
             return
-        self._stop_event.clear()
+        # each loop has its own stop event, so a loop being replaced (it
+        # may be mid-check) cannot carry on beside its successor
+        self._stop_event = threading.Event()
         self._thread = threading.Thread(
             target=self._periodic_loop,
-            args=(interval * 3600,),
+            args=(interval * 3600, self._stop_event),
             name="UpdatePeriodic",
             daemon=True,
         )
         self._thread.start()
         log.info("Periodic update check every %dh", interval)
 
-    def _periodic_loop(self, interval_sec: float):
-        while not self._stop_event.is_set():
-            if self._stop_event.wait(timeout=interval_sec):
+    def _periodic_loop(self, interval_sec: float, stop: threading.Event):
+        while not stop.is_set():
+            if stop.wait(timeout=interval_sec):
                 break  # stop requested
             self.check_for_updates()
 

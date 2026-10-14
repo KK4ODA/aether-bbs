@@ -245,7 +245,7 @@ def test_settings_that_need_a_restart_are_named():
     assert restart_needed(old, new) == [
         "Inbound email", "Bulletin forwarding (neighbours and server)",
         "APRS (turning it on)", "Enabling modem instance HF",
-        "New modem instance VHF", "Update check interval"]
+        "New modem instance VHF"]
 
 
 def test_an_unchanged_secret_is_saved_unchanged(qapp, tmp_path):

@@ -330,9 +330,6 @@ def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
             areas.append(f"Enabling modem instance {inst.name}")
         elif inst.ptt != was.ptt or inst.bandwidth != was.bandwidth:
             areas.append(f"PTT or bandwidth of {inst.name}")
-    if (old.updater.auto_check_interval_hours
-            != new.updater.auto_check_interval_hours):
-        areas.append("Update check interval")
     return areas
 
 
