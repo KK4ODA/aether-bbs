@@ -27,6 +27,7 @@ INBOX = [{"MID": "ABC123DEF456", "Subject": "hello", "From": {"Addr": "W1AW@winl
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)          # the seen-IDs file is kept in the cwd
     cfg = AppConfig()
     cfg.bbs.message_dir = str(tmp_path / "messages")
     store = MessageStore(cfg)
