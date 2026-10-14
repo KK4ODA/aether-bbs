@@ -291,3 +291,109 @@ def test_repeated_password_failures_are_refused_before_the_challenge(bbs):
         assert ";AUTH HMAC" not in text
     finally:
         u.close()
+
+
+# ── Numbered lookups, paging and message bodies ────────────────────────────
+
+def test_kb_deletes_only_your_own_bulletin(bbs):
+    cfg, store, bulletins = bbs
+    theirs = bulletins.save_bulletin("W1AAA", "ALL", "theirs", b"x", area="ALL")
+    time.sleep(1.1)
+    mine = bulletins.save_bulletin("W1XYZ", "ALL", "mine", b"y", area="ALL")
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        u.cmd("LB")                                   # newest first: 1 = mine
+        assert "only delete your own" in u.cmd("KB 2")
+        assert store.get_message(theirs) is not None
+        assert "Bulletin 1 deleted" in u.cmd("KB 1")
+        assert store.get_message(mine) is None
+    finally:
+        u.close()
+
+
+@pytest.mark.parametrize("cmd,reply", [
+    ("R x", "Usage: R <message number>"), ("R 9", "Message not found."),
+    ("K x", "Usage: K <message number>"), ("K 9", "Message not found."),
+    ("RB x", "Usage: RB <bulletin number>"), ("RB 9", "Bulletin not found."),
+    ("KB x", "Usage: KB <bulletin number>"), ("KB 9", "Bulletin not found."),
+])
+def test_bad_numbers_get_usage_or_not_found(bbs, cmd, reply):
+    cfg, store, bulletins = bbs
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        assert reply in u.cmd(cmd)
+    finally:
+        u.close()
+
+
+def test_listing_pauses_every_page_and_q_stops_it(bbs):
+    cfg, store, bulletins = bbs
+    for n in range(7):
+        store.save_message("W1AAA", "W1XYZ", f"subject {n}", b"x")
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        u.s._pager = 3
+        out = u.cmd("L")
+        assert out.count("-- More --") == 1
+        out += u.cmd("")                              # next page
+        assert out.count("-- More --") == 2
+        rest = u.cmd("Q")                             # stop the listing
+        assert "subject" not in rest
+        assert sum(f"subject {n}" in out for n in range(7)) == 6
+    finally:
+        u.close()
+
+
+def test_a_full_last_page_does_not_pause(bbs):
+    cfg, store, bulletins = bbs
+    for n in range(3):
+        store.save_message("W1AAA", "W1XYZ", f"subject {n}", b"x")
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        u.s._pager = 3
+        assert "-- More --" not in u.cmd("L")
+    finally:
+        u.close()
+
+
+def test_a_long_bulletin_is_paged(bbs):
+    cfg, store, bulletins = bbs
+    body = "\n".join(f"line {n}" for n in range(5)).encode()
+    bulletins.save_bulletin("W1AAA", "ALL", "long", body, area="ALL")
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        u.s._pager = 2
+        u.cmd("LB")
+        out = u.cmd("RB 1")
+        assert "line 1" in out and "line 2" not in out and "-- More --" in out
+        out = u.cmd("")
+        assert "line 3" in out and "line 4" not in out
+        assert "line 4" in u.cmd("")
+    finally:
+        u.close()
+
+
+def test_bulletin_without_subject_or_body_is_not_saved(bbs):
+    cfg, store, bulletins = bbs
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        u.cmd("SB ALL")
+        assert "No subject entered" in u.cmd("")
+        u.cmd("SB ALL")
+        u.cmd("a subject")
+        assert "No body entered" in u.cmd(".")
+        assert bulletins.list_bulletins() == []
+    finally:
+        u.close()
+
+
+def test_link_drop_while_typing_a_bulletin_saves_nothing(bbs):
+    cfg, store, bulletins = bbs
+    u = Session("W1XYZ", cfg, store, bulletins)
+    u.cmd("SB ALL")
+    u.cmd("a subject")
+    u.cmd("first line")
+    u.s.feed_line(None)
+    u.t.join(timeout=5)
+    assert not u.t.is_alive()
+    assert bulletins.list_bulletins() == []
