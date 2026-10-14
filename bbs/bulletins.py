@@ -918,8 +918,9 @@ class BulletinForwardingServer:
         transport (a TCP connection, or an RF session from a neighbour).
 
         ``expected_call``: on RF, the neighbour the caller was identified
-        as; a HELLO naming another BBS is refused.  Returns True when the
-        session ran to its end.
+        as; a HELLO naming another BBS is refused.  Only enabled neighbours
+        in Settings → Forwarding are served.  Returns True when the session
+        ran to its end.
         """
         fwd = BulletinForwarder(self._config, self._store, self._bbs, self._bus)
         try:
@@ -933,6 +934,11 @@ class BulletinForwardingServer:
                     expected_call.upper().split("-")[0]:
                 log.warning(f"Forwarding: HELLO from {remote_call} on a call "
                             f"from {expected_call}; refused")
+                return False
+            if not any(n.enabled and n.matches(remote_call) for n in
+                       getattr(self._config.bbs, "forwarding_neighbours", [])):
+                log.warning(f"Forwarding: HELLO from {remote_call}, which is "
+                            f"not a configured neighbour; refused")
                 return False
 
             # Build a transient neighbour handle for this session

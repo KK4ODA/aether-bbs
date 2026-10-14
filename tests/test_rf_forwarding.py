@@ -122,6 +122,8 @@ def _setup(tmp_path, answer=True):
     a_cfg.station.bbs_callsign = "W1AAA-10"
     b_cfg, b_store, b_bbs = _stores(tmp_path, "b")
     b_cfg.station.bbs_callsign = "W2BBB-10"
+    b_cfg.bbs.forwarding_neighbours = [
+        ForwardingNeighbourConfig(bbs_callsign="W1AAA-10", via="RF", instance="HF")]
 
     port = _free_port_pair()
     modem = FakeModemWithPeer(port, b_cfg, b_store, b_bbs, answer=answer)
@@ -213,6 +215,23 @@ def test_server_refuses_hello_from_another_bbs(tmp_path):
     assert ok is False and sent == []
 
 
+def test_server_refuses_a_bbs_that_is_not_a_neighbour(tmp_path):
+    """Anyone who could reach the TCP port could post bulletins by
+    sending FWD HELLO with any callsign."""
+    from bbs.bulletins import BulletinForwardingServer
+    cfg, store, bbs = _stores(tmp_path, "s")
+    cfg.bbs.forwarding_neighbours = [
+        ForwardingNeighbourConfig(bbs_callsign="W2BBB-10"),
+        ForwardingNeighbourConfig(bbs_callsign="N0OFF-10", enabled=False)]
+    for hello in ("FWD HELLO K9XYZ-10", "FWD HELLO N0OFF-10"):
+        send, recv, sent = _scripted([
+            hello, "FWD DATA MID0002 K9XYZ ALL - spam", "FWD BODY", "x", "FWD END"])
+        assert BulletinForwardingServer(cfg, store, bbs, EventBus()).serve(
+            send=send, recv=recv) is False
+        assert sent == []
+    assert not store.has_message("MID0002")
+
+
 def test_bulletins_cross_both_ways_over_tcp(tmp_path):
     """The same protocol over TCP (it shared the RF path's parsing bugs)."""
     import socket
@@ -225,6 +244,8 @@ def test_bulletins_cross_both_ways_over_tcp(tmp_path):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
+    b_cfg.bbs.forwarding_neighbours = [
+        ForwardingNeighbourConfig(bbs_callsign="W1AAA-10", host="127.0.0.1")]
     b_cfg.bbs.forwarding.server_enabled = True
     b_cfg.bbs.forwarding.server_port = port
     b_cfg.bbs.forwarding.server_bind = "127.0.0.1"
@@ -270,6 +291,7 @@ def _scripted(lines):
 def test_server_never_forwards_a_private_message(tmp_path):
     from bbs.bulletins import BulletinForwardingServer
     cfg, store, bbs = _stores(tmp_path, "s")
+    cfg.bbs.forwarding_neighbours = [ForwardingNeighbourConfig(bbs_callsign="W2BBB-10")]
     private = store.save_message("W1AAA", "N0VIC", "private", b"TOP SECRET")
     send, recv, sent = _scripted(["FWD HELLO W2BBB-10", f"FWD GET {private}"])
     BulletinForwardingServer(cfg, store, bbs, EventBus()).serve(send=send, recv=recv)
