@@ -31,12 +31,25 @@ def _wait(cond, timeout=5.0):
     return False
 
 
+def _start_simulator():
+    """A running simulator on a free port pair.  A port found free can be
+    taken before the simulator binds it (Windows then says WinError 10013),
+    so try a fresh pair."""
+    for _ in range(10):
+        port = _free_port_pair()
+        sim = VARAFMSimulator(port, port + 1)
+        try:
+            sim.start()
+            return port, sim
+        except OSError:
+            sim.stop()
+    raise RuntimeError("could not start the VARA simulator")
+
+
 @pytest.fixture
 def link():
     """An interface attached to a simulated modem; yields (sim, iface, events)."""
-    port = _free_port_pair()
-    sim = VARAFMSimulator(port, port + 1)
-    sim.start()
+    port, sim = _start_simulator()
     bus = EventBus()
     events = []
     for et in (EventType.SESSION_CONNECTED, EventType.SESSION_DISCONNECTED,
@@ -103,9 +116,7 @@ def test_quiet_command_port_keeps_the_link(monkeypatch):
     a lost link (it used to drop and re-init the modem every ~35 s)."""
     import vara.interface as vi
     monkeypatch.setattr(vi, "SOCKET_POLL_TIMEOUT", 0.5)
-    port = _free_port_pair()
-    sim = VARAFMSimulator(port, port + 1)
-    sim.start()
+    port, sim = _start_simulator()
     bus = EventBus()
     lost = []
     bus.subscribe(EventType.VARA_DISCONNECTED, lost.append)
@@ -137,9 +148,7 @@ def test_reconnect_does_not_leave_old_io_threads(monkeypatch):
     one writer per socket, not two writers draining the same TX queue."""
     import vara.interface as vi
     monkeypatch.setattr(vi, "SOCKET_POLL_TIMEOUT", 0.3)
-    port = _free_port_pair()
-    sim = VARAFMSimulator(port, port + 1)
-    sim.start()
+    port, sim = _start_simulator()
     bus = EventBus()
     cfg = InstanceConfig(name="Rc", cmd_port=port, data_port=port + 1,
                          executable_path="", auto_start=False)
@@ -224,7 +233,6 @@ def test_reconnect_keeps_trying_until_the_modem_is_back(monkeypatch):
 def test_start_on_an_attached_soundmodem_instance_does_nothing(monkeypatch):
     """Pressing Start on a running Soundmodem instance used to open a second
     AGWPE connection (and launch a second Soundmodem) beside the first."""
-    import vara.instance_manager as im_mod
     from vara.instance_manager import InstanceStatus, ModemInstanceManager
     launched = []
     monkeypatch.setattr("subprocess.Popen", lambda *a, **k: launched.append(a))
