@@ -22,7 +22,22 @@ class WebSocket:
     """One WebSocket to ``ws://host:port/v1``."""
 
     def __init__(self, host: str, port: int, token: str = "", timeout: float = 5.0):
-        self._sock = socket.create_connection((host, port), timeout=timeout)
+        try:
+            self._sock = socket.create_connection((host, port), timeout=timeout)
+        except OSError as e:
+            # callers (the instance card's Probe) handle AetherControlError
+            raise AetherControlError(
+                f"Aether HF control API not reachable at {host}:{port} ({e})",
+                code="unreachable") from e
+        try:
+            self._handshake(host, port, token)
+        except OSError as e:
+            self.close()
+            raise AetherControlError(
+                f"Aether HF control API handshake failed ({e})",
+                code="unreachable") from e
+
+    def _handshake(self, host: str, port: int, token: str):
         key = base64.b64encode(os.urandom(16)).decode()
         lines = [
             f"GET /{API_VERSION} HTTP/1.1",

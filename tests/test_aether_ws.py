@@ -113,3 +113,17 @@ def test_update_required_is_called_out():
     assert msgs == ["Update required — W1ABC runs link protocol 6; update it."]
     assert problems({"mismatch": "A 2300 Hz call to a 500 Hz station.",
                      "mismatch_what": "call"}) == ["A 2300 Hz call to a 500 Hz station."]
+
+
+def test_probe_with_aether_not_running_raises_control_error():
+    """The card's Probe catches AetherControlError; a refused connection
+    used to escape as OSError and leave the card at "Probe X…"."""
+    import socket
+    import pytest
+    from aether.control import AetherControlClient, AetherControlError
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]          # nothing listens here now
+    with pytest.raises(AetherControlError) as err:
+        AetherControlClient("127.0.0.1", port).probe("W1AW", timeout=2)
+    assert err.value.code == "unreachable"
