@@ -136,10 +136,9 @@ class BBSApplication:
             converse_manager=self.converse_manager,
         )
 
-        if self.config.aprs.enabled:
-            self.aprs_gateway = APRSGateway(
-                self.config_manager, self.event_bus
-            )
+        # always built (it connects only once started) so that turning
+        # APRS on in Settings needs no restart
+        self.aprs_gateway = APRSGateway(self.config_manager, self.event_bus)
 
         # Pat Winlink client — always create, enable/disable via config
         self.cms_poller = PatClient(
@@ -215,7 +214,7 @@ class BBSApplication:
         self.dispatcher.start()
         self.bulletin_forwarder.start()
         self.bulletin_server.start()
-        if self.aprs_gateway:
+        if self.aprs_gateway and self.config.aprs.enabled:
             self.aprs_gateway.start()
         if self.cms_poller:
             self.cms_poller.start()
@@ -243,6 +242,11 @@ class BBSApplication:
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
             lambda e: (e.data or {}).get("config") and self.bulletin_server.apply_config(),
+        )
+        # APRS-IS: connect when turned on, disconnect when turned off
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            self._on_config_changed_aprs,
         )
         # Inbound email and the Winlink forward list
         self.event_bus.subscribe(
@@ -322,6 +326,15 @@ class BBSApplication:
             max_message_size=ie.max_message_size,
             allowed_senders=ie.allowed_senders,
         )
+
+    def _on_config_changed_aprs(self, event):
+        cfg = (event.data or {}).get("config")
+        if not cfg or not self.aprs_gateway:
+            return
+        if cfg.aprs.enabled and not self.aprs_gateway.running:
+            self.aprs_gateway.start()
+        elif not cfg.aprs.enabled and self.aprs_gateway.running:
+            self.aprs_gateway.stop()
 
     def _on_config_changed_email(self, event):
         cfg = (event.data or {}).get("config")

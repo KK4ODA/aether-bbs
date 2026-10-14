@@ -311,8 +311,6 @@ def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
     """The changed settings, from *old* to *new*, that the running BBS
     only picks up when it is restarted (one label per area)."""
     areas = []
-    if new.aprs.enabled and not old.aprs.enabled:
-        areas.append("APRS (turning it on)")
     before = {i.name: i for i in old.instances}
     for inst in new.instances:
         was = before.get(inst.name)

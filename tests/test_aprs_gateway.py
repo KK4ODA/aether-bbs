@@ -132,3 +132,34 @@ def test_dropped_link_is_replaced_by_one_connection(gateway):
     assert [e.type for e in events] == [EventType.APRS_IS_CONNECTED,
                                         EventType.APRS_IS_DISCONNECTED,
                                         EventType.APRS_IS_CONNECTED]
+
+
+def _connect_loops():
+    return [t for t in threading.enumerate()
+            if t.name == "APRS-IS-Connect" and t.is_alive()]
+
+
+def test_turning_aprs_off_and_on_again_keeps_one_connection(gateway):
+    """APRS was built and started only if it was on at startup; turning it
+    off was ignored.  Stop then start shared one stop event, so a loop
+    still waiting to reconnect could run on beside the new one."""
+    from types import SimpleNamespace
+    import main
+    g, server, _ = gateway
+    app = main.BBSApplication.__new__(main.BBSApplication)
+    app.aprs_gateway = g
+    assert not g.running
+    on = g._cm.current()
+    app._on_config_changed_aprs(SimpleNamespace(data={"config": on}))
+    assert _wait(lambda: g.is_connected)
+
+    off = on.model_copy(deep=True)
+    off.aprs.enabled = False
+    app._on_config_changed_aprs(SimpleNamespace(data={"config": off}))
+    assert not g.running
+    assert _wait(lambda: not _connect_loops() and not _rx_threads())
+
+    app._on_config_changed_aprs(SimpleNamespace(data={"config": on}))
+    assert _wait(lambda: g.is_connected and len(server.clients) == 2)
+    time.sleep(1.0)
+    assert len(_connect_loops()) == 1 and len(_rx_threads()) == 1
