@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+import core.reconnect
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.config import InstanceConfig
@@ -205,10 +207,9 @@ def test_ptt_released_when_modem_link_drops():
 
 
 def test_reconnect_keeps_trying_until_the_modem_is_back(monkeypatch):
-    import vara.broker as vb
     from vara.broker import TNCBroker
     sleeps = []
-    monkeypatch.setattr(vb.time, "sleep", sleeps.append)
+    monkeypatch.setattr(core.reconnect.time, "sleep", sleeps.append)
 
     class Iface:
         attempts = 0
@@ -249,10 +250,9 @@ def test_start_on_an_attached_soundmodem_instance_does_nothing(monkeypatch):
 
 def test_a_second_drop_while_reconnecting_starts_no_second_loop(monkeypatch):
     """Each lost-link event started its own reconnect loop."""
-    import vara.broker as vb
     from vara.broker import TNCBroker
     gate = threading.Event()
-    monkeypatch.setattr(vb.time, "sleep", lambda d: gate.wait(2))
+    monkeypatch.setattr(core.reconnect.time, "sleep", lambda d: gate.wait(2))
     broker = TNCBroker.__new__(TNCBroker)
     broker.cfg = InstanceConfig(name="RC2")
     broker._rig_control = None
@@ -272,7 +272,6 @@ def test_a_second_drop_while_reconnecting_starts_no_second_loop(monkeypatch):
 
 
 def test_connect_gives_up_after_its_tries_without_a_last_wait(monkeypatch):
-    import vara.interface as vi
     waits = []
     iface = VARAFMInterfaceWithCall(InstanceConfig(name="X", cmd_port=1024, data_port=1025),
                                     EventBus(), "W1TEST-10")
@@ -282,3 +281,63 @@ def test_connect_gives_up_after_its_tries_without_a_last_wait(monkeypatch):
     iface.connect()
     assert waits == [1.0, 2.0, 4.0, 8.0]           # 5 tries, no wait after the last
     assert iface.state == VARAFMState.DISCONNECTED
+
+
+def _init_commands(monkeypatch, transport, reinit, **inst):
+    """The commands a modem init (or the broker's re-init) sends."""
+    import vara.interface as vi
+    monkeypatch.setattr(vi.time, "sleep", lambda s: None)
+    cfg = InstanceConfig(name="I", transport=transport, **inst)
+    iface = VARAFMInterfaceWithCall(cfg, EventBus(), "W1TEST-10")
+    sent = []
+    iface.send_cmd = sent.append
+    iface._cmd_sock = object()                     # "connected"
+    iface._state = VARAFMState.LISTENING
+    if reinit:
+        from vara.broker import TNCBroker
+        broker = TNCBroker.__new__(TNCBroker)
+        broker.cfg = cfg
+        broker._app_cfg = type("A", (), {"station": type("S", (), {
+            "bbs_callsign": "W1TEST-10"})()})()
+        broker._interface = iface
+        broker._reinit_vara()
+    else:
+        iface._init_vara()
+    return sent
+
+
+@pytest.mark.parametrize("transport,inst", [
+    ("VARA_FM", {}),
+    ("VARA_HF", {"bandwidth": 500}),
+    ("AETHER_HF", {}),
+])
+def test_reinit_sends_the_same_sequence_as_init(monkeypatch, transport, inst):
+    """The broker's re-init (before an outbound call) was a copy of the
+    modem init that had drifted: no VERSION for Aether HF, no abort when
+    the link dropped, different waits."""
+    init = _init_commands(monkeypatch, transport, False, **inst)
+    again = _init_commands(monkeypatch, transport, True, **inst)
+    assert again == init
+    assert init[0] == "MYCALL W1TEST-10" and init[-1] == "LISTEN ON"
+
+
+def test_reinit_stops_when_the_link_drops(monkeypatch):
+    import vara.interface as vi
+    cfg = InstanceConfig(name="I", transport="VARA_HF", bandwidth=500)
+    iface = VARAFMInterfaceWithCall(cfg, EventBus(), "W1TEST-10")
+    sent = []
+
+    def send(cmd):
+        sent.append(cmd)
+        iface._cmd_sock = None                     # the modem goes away
+    iface.send_cmd = send
+    iface._cmd_sock = object()
+    iface._state = VARAFMState.LISTENING
+    monkeypatch.setattr(vi.time, "sleep", lambda s: None)
+    from vara.broker import TNCBroker
+    broker = TNCBroker.__new__(TNCBroker)
+    broker.cfg = cfg
+    broker._app_cfg = None
+    broker._interface = iface
+    broker._reinit_vara()
+    assert sent == ["MYCALL W1TEST-10"]
