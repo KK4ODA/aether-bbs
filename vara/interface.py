@@ -19,6 +19,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from core.config import InstanceConfig
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from core.logging_manager import VARA_CMD_LOGGER_NAME
 
@@ -121,44 +122,36 @@ class VARAFMInterface:
         self._stop_event.clear()
         self._set_state(VARAFMState.CONNECTING)
 
-        delay = RETRY_BASE_DELAY
-        for attempt in range(1, CONNECT_RETRIES + 1):
-            if self._stop_event.is_set():
-                return
+        attempts = [0]
+
+        def attempt() -> bool:
+            attempts[0] += 1
             try:
-                self._cmd_sock = socket.create_connection(
-                    (self.cfg.host, self.cfg.cmd_port),
-                    timeout=CONNECT_TIMEOUT,
-                )
-                try:
-                    self._data_sock = socket.create_connection(
-                        (self.cfg.host, self.cfg.data_port),
-                        timeout=CONNECT_TIMEOUT,
-                    )
-                except OSError:
-                    self._cmd_sock.close()
-                    self._cmd_sock = None
-                    raise
-                self._cmd_sock.settimeout(SOCKET_POLL_TIMEOUT)
-                self._data_sock.settimeout(SOCKET_POLL_TIMEOUT)
-                log.info(
-                    f"[{self.cfg.name}] Connected to {modem_label(self.cfg)} "
-                    f"(cmd:{self.cfg.cmd_port} data:{self.cfg.data_port})"
-                )
-                self._set_state(VARAFMState.IDLE)
-                self._bus.emit(EventType.VARA_CONNECTED, source=self.cfg.name)
-                self._start_threads()
-                self._init_vara()
-                return
+                self._open_sockets()
+                return True
             except OSError as e:
                 log.warning(
-                    f"[{self.cfg.name}] TCP connect attempt {attempt}/{CONNECT_RETRIES} "
-                    f"failed: {e} — retry in {delay:.0f}s"
+                    f"[{self.cfg.name}] TCP connect attempt {attempts[0]}/"
+                    f"{CONNECT_RETRIES} failed: {e}"
                 )
-                if attempt < CONNECT_RETRIES:
-                    # Use Event.wait so disconnect() can interrupt the sleep
-                    self._stop_event.wait(timeout=delay)
-                    delay = min(delay * 2, MAX_RETRY_DELAY)
+                return False
+
+        # Event.wait, so disconnect() can interrupt a wait between tries
+        if retry(attempt, Backoff(RETRY_BASE_DELAY, MAX_RETRY_DELAY),
+                 should_stop=self._stop_event.is_set,
+                 wait=lambda delay: self._stop_event.wait(timeout=delay),
+                 max_attempts=CONNECT_RETRIES):
+            log.info(
+                f"[{self.cfg.name}] Connected to {modem_label(self.cfg)} "
+                f"(cmd:{self.cfg.cmd_port} data:{self.cfg.data_port})"
+            )
+            self._set_state(VARAFMState.IDLE)
+            self._bus.emit(EventType.VARA_CONNECTED, source=self.cfg.name)
+            self._start_threads()
+            self._init_vara()
+            return
+        if self._stop_event.is_set():
+            return
 
         log.error(f"[{self.cfg.name}] Could not connect to {modem_label(self.cfg)} "
                   f"after {CONNECT_RETRIES} attempts")
@@ -168,6 +161,20 @@ class VARAFMInterface:
                 f"on (Setup step 5, port {self.cfg.cmd_port})?"
             )
         self._set_state(VARAFMState.DISCONNECTED)
+
+    def _open_sockets(self):
+        """Open the command and data ports (raises OSError)."""
+        self._cmd_sock = socket.create_connection(
+            (self.cfg.host, self.cfg.cmd_port), timeout=CONNECT_TIMEOUT)
+        try:
+            self._data_sock = socket.create_connection(
+                (self.cfg.host, self.cfg.data_port), timeout=CONNECT_TIMEOUT)
+        except OSError:
+            self._cmd_sock.close()
+            self._cmd_sock = None
+            raise
+        self._cmd_sock.settimeout(SOCKET_POLL_TIMEOUT)
+        self._data_sock.settimeout(SOCKET_POLL_TIMEOUT)
 
     def disconnect(self):
         """Cleanly disconnect from VARA FM TCP.

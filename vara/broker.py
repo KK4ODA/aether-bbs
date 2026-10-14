@@ -11,6 +11,7 @@ import threading
 from typing import Optional, Protocol
 
 from core.config import InstanceConfig, AppConfig
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from vara.interface import (VARAFMInterfaceWithCall, VARAFMState,
                             init_bandwidth, modem_label)
@@ -435,28 +436,28 @@ class TNCBroker:
             self._ptt.release("modem link lost")
         if self._retired:
             return
+        thread = getattr(self, "_reconnect_thread", None)
+        if thread is not None and thread.is_alive():
+            return               # already reconnecting: one loop only
         log.warning(f"[{self.cfg.name}] {modem_label(self.cfg)} TCP dropped; "
                     f"attempting reconnect in 5s")
-        threading.Thread(
+        self._reconnect_thread = threading.Thread(
             target=self._reconnect_loop,
             name=f"Reconnect-{self.cfg.name}",
             daemon=True,
-        ).start()
+        )
+        self._reconnect_thread.start()
 
     def _reconnect_loop(self):
         """Keep trying until the modem is back or this broker is retired
         (a modem restart can take longer than one connect()'s retries)."""
-        delay = 5.0
-        while True:
-            time.sleep(delay)
-            if self._retired:
-                return
+        def attempt() -> bool:
             log.info(f"[{self.cfg.name}] Attempting {modem_label(self.cfg)} reconnect")
             self._interface.connect()
-            if self._retired:
-                return
-            if self._interface.state != VARAFMState.DISCONNECTED:
-                self._start_data_relay()
-                return
-            delay = min(delay * 2, 60.0)
+            return (not self._retired
+                    and self._interface.state != VARAFMState.DISCONNECTED)
+
+        if retry(attempt, Backoff(5.0, 60.0), should_stop=lambda: self._retired,
+                 wait_first=True):
+            self._start_data_relay()
 

@@ -245,3 +245,40 @@ def test_start_on_an_attached_soundmodem_instance_does_nothing(monkeypatch):
     mgr = ModemInstanceManager.__new__(ModemInstanceManager)
     mgr._start_soundmodem_instance(status)
     assert status.mux is attached and launched == []
+
+
+def test_a_second_drop_while_reconnecting_starts_no_second_loop(monkeypatch):
+    """Each lost-link event started its own reconnect loop."""
+    import vara.broker as vb
+    from vara.broker import TNCBroker
+    gate = threading.Event()
+    monkeypatch.setattr(vb.time, "sleep", lambda d: gate.wait(2))
+    broker = TNCBroker.__new__(TNCBroker)
+    broker.cfg = InstanceConfig(name="RC2")
+    broker._rig_control = None
+    broker._ptt = None
+    broker._retired = False
+    broker._interface = type("I", (), {"state": VARAFMState.DISCONNECTED,
+                                        "connect": lambda self: None})()
+    broker._start_data_relay = lambda: None
+    event = type("E", (), {"source": "RC2"})()
+    try:
+        broker._on_vara_disconnected(event)
+        broker._on_vara_disconnected(event)
+        assert len(_threads("Reconnect-RC2")) == 1
+    finally:
+        broker._retired = True
+        gate.set()
+
+
+def test_connect_gives_up_after_its_tries_without_a_last_wait(monkeypatch):
+    import vara.interface as vi
+    waits = []
+    iface = VARAFMInterfaceWithCall(InstanceConfig(name="X", cmd_port=1024, data_port=1025),
+                                    EventBus(), "W1TEST-10")
+    monkeypatch.setattr(iface, "_open_sockets",
+                        lambda: (_ for _ in ()).throw(OSError("refused")))
+    monkeypatch.setattr(iface._stop_event, "wait", lambda timeout=None: waits.append(timeout))
+    iface.connect()
+    assert waits == [1.0, 2.0, 4.0, 8.0]           # 5 tries, no wait after the last
+    assert iface.state == VARAFMState.DISCONNECTED
