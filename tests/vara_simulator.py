@@ -1,9 +1,10 @@
 """
 tests/vara_simulator.py
 
-VARA FM TCP simulator for integration testing.
+VARA FM TCP simulator for integration testing (tests/test_vara_interface.py).
 Mimics the VARA FM command and data TCP ports so you can test
-the mux and session layers without real RF hardware.
+the mux and session layers without real RF hardware.  It sends events the
+way VARA does: "CONNECTED <remote> <local>", "BUSY ON|OFF", "PTT ON|OFF".
 
 Usage:
     sim = VARAFMSimulator(cmd_port=8300, data_port=8301)
@@ -95,19 +96,19 @@ class VARAFMSimulator:
 
     # ── Simulation controls ───────────────────────────────────────────────
 
-    def simulate_connect(self, remote_call: str, mycall: str = "W1ABC-10"):
-        """Inject a CONNECTED event as if an RF station connected."""
-        self.send_event(f"CONNECTED {mycall} {remote_call}")
+    def simulate_connect(self, remote_call: str, mycall: str = "W1TEST-10"):
+        """Inject a CONNECTED event as if an RF station called us."""
+        self.send_event(f"CONNECTED {remote_call} {mycall}")
 
     def simulate_disconnect(self):
         """Inject a DISCONNECTED event."""
         self.send_event("DISCONNECTED")
 
     def simulate_busy(self, busy: bool):
-        self.send_event(f"BUSY {'TRUE' if busy else 'FALSE'}")
+        self.send_event(f"BUSY {'ON' if busy else 'OFF'}")
 
     def simulate_ptt(self, active: bool):
-        self.send_event(f"PTT {'TRUE' if active else 'FALSE'}")
+        self.send_event(f"PTT {'ON' if active else 'OFF'}")
 
     def simulate_buffer(self, n: int):
         self.send_event(f"BUFFER {n}")
@@ -242,110 +243,3 @@ class VARAFMSimulator:
                 continue
             except OSError:
                 break
-
-
-# ── Integration test using simulator ─────────────────────────────────────────
-
-class TestVARAFMIntegration:
-    """
-    Integration tests using the simulator.
-    These do NOT require real VARA FM hardware.
-    """
-
-    def test_interface_receives_connected_event(self):
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-
-        from core.config import InstanceConfig
-        from core.events import EventBus, EventType
-        from vara.interface import VARAFMInterfaceWithCall
-
-        received = []
-        bus = EventBus()
-        bus.subscribe(EventType.SESSION_CONNECTED,
-                      lambda e: received.append(e))
-
-        # Find a free port pair
-        cmd_port, data_port = 18300, 18301
-        sim = VARAFMSimulator(cmd_port, data_port)
-        sim.start()
-
-        cfg = InstanceConfig(
-            name="TestInstance",
-            cmd_port=cmd_port,
-            data_port=data_port,
-            executable_path="",
-            auto_start=False,
-        )
-
-        iface = VARAFMInterfaceWithCall(cfg, bus, "W1TEST-10")
-        connect_thread = threading.Thread(target=iface.connect, daemon=True)
-        connect_thread.start()
-
-        assert sim.wait_for_client(timeout=3.0), "Client did not connect"
-
-        # Simulate RF connect
-        time.sleep(0.5)
-        sim.simulate_connect("W9XYZ")
-
-        # Wait for event
-        deadline = time.time() + 3.0
-        while time.time() < deadline and not received:
-            time.sleep(0.1)
-
-        assert len(received) == 1
-        assert received[0].data["remote_call"] == "W9XYZ"
-
-        iface.disconnect()
-        sim.stop()
-
-    def test_mycall_sent_on_init(self):
-        import sys, threading, time
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-
-        from core.config import InstanceConfig
-        from core.events import EventBus
-        from vara.interface import VARAFMInterfaceWithCall
-
-        cmd_port, data_port = 18310, 18311
-        sim = VARAFMSimulator(cmd_port, data_port)
-        sim.start()
-
-        cfg = InstanceConfig(
-            name="TestInstance2",
-            cmd_port=cmd_port,
-            data_port=data_port,
-            executable_path="",
-            auto_start=False,
-        )
-        bus = EventBus()
-        iface = VARAFMInterfaceWithCall(cfg, bus, "W1TEST-10")
-        t = threading.Thread(target=iface.connect, daemon=True)
-        t.start()
-
-        sim.wait_for_client(timeout=3.0)
-
-        # Give interface time to send MYCALL
-        mycall_cmd = sim.wait_for_command("MYCALL", timeout=5.0)
-        assert mycall_cmd is not None, "MYCALL not sent"
-        assert "W1TEST-10" in mycall_cmd
-
-        iface.disconnect()
-        sim.stop()
-
-
-if __name__ == "__main__":
-    # Run integration tests manually
-    import logging
-    logging.basicConfig(level=logging.DEBUG)
-
-    t = TestVARAFMIntegration()
-    print("Running test_mycall_sent_on_init...")
-    t.test_mycall_sent_on_init()
-    print("PASS")
-
-    print("Running test_interface_receives_connected_event...")
-    t.test_interface_receives_connected_event()
-    print("PASS")
