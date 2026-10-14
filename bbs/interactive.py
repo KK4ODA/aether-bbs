@@ -103,7 +103,6 @@ class InteractiveSession:
         disconnect_fn,   # callable() — disconnects the RF session
         bulletin_store: Optional[BulletinStore] = None,
         file_store=None,
-        b2f_handoff_fn=None,  # callable(first_line) — hand off to B2F session
         access_controller=None,  # bbs.access.AccessController
         mode_policy=None,        # bbs.mode_policy.ModePolicy
         rate_limiter=None,       # bbs.rate_limiter.RateLimiter
@@ -141,7 +140,6 @@ class InteractiveSession:
         self._is_sysop = (
             self.remote_call == config.station.sysop_callsign.upper()
         )
-        self._b2f_handoff = b2f_handoff_fn
         # Set once the RF link is gone: every prompt then ends at once
         self._link_down = False
         # Area of the last L / LB, so R/K and RB/KB number the same list
@@ -600,13 +598,17 @@ class InteractiveSession:
     # ── Command dispatch ──────────────────────────────────────────────────
 
     def _handle_command(self, cmd: str):
-        # Detect a Winlink B2F session request — remote sends "[WL2K-...]"
-        # Hand off transparently so Winlink clients get a proper B2F exchange.
-        if cmd.startswith("[") and self._b2f_handoff:
-            log.info(f"[{self.instance_name}] B2F header detected from "
-                     f"{self.remote_call} — handing off to B2F session")
+        # A Winlink client opens with its banner ("[RMS Express-...]").
+        # This BBS has no B2F message exchange (Winlink mail goes through
+        # Pat): say so the way B2F reports errors, and hang up.
+        if cmd.startswith("[") and cmd.rstrip().endswith("]"):
+            log.info(f"[{self.instance_name}] Winlink client {self.remote_call} "
+                     f"refused: no B2F here ({cmd[:40]})")
+            self._send("*** This BBS does not offer Winlink (B2F) message "
+                       "exchange. Use a Winlink gateway.\r\n")
             self._running = False
-            self._b2f_handoff(cmd)
+            time.sleep(0.5)
+            self._disconnect()
             return
 
         upper = cmd.upper()

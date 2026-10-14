@@ -125,33 +125,18 @@ def test_link_drop_during_chat_ends_the_session(bbs):
     assert not u.t.is_alive()
 
 
-def _b2f(store, link_call, banner, replies):
-    from bbs.b2f import B2FSession
-    it = iter(replies)
-    out = []
-    s = B2FSession("BBS", store, out.append, lambda t: next(it, None),
-                   lambda n, t: b"", send_raw_fn=out.append, remote_call=link_call)
-    s.run(first_line=banner)
-    return out
-
-
-def test_b2f_sends_mail_of_the_linked_station_not_the_banner(bbs):
-    """Typing another station's callsign in the client banner must not
-    fetch (and mark sent) that station's private mail."""
-    cfg, store, _ = bbs
-    victim = store.save_message("W1AAA", "N0VIC", "secret", b"private body")
-    out = _b2f(store, "W1XYZ-7", "[N0VIC-1.0-B2FHM$]", [";PR: 0", "FS +"])
-    assert not any(isinstance(o, bytes) and b"private" in o for o in out)
-    assert not store.get_message(victim)["is_sent"]
-
-
-def test_b2f_real_client_banner_gets_its_own_mail(bbs):
-    """A real Winlink client's banner ("[RMS Express-...]") used to parse as
-    the callsign "RMS EXPRESS", so the station never got its mail."""
-    cfg, store, _ = bbs
-    mine = store.save_message("W1AAA", "W1XYZ", "for you", b"your mail")
-    out = _b2f(store, "W1XYZ-7", "[RMS Express-1.7-B2FHM$]", [";PR: 0", "FS +"])
-    assert any(isinstance(o, str) and mine in o for o in out)    # proposed to W1XYZ
+def test_winlink_client_is_told_there_is_no_b2f_and_disconnected(bbs):
+    """B2F was removed (a real client, Pat, could not exchange mail with
+    it).  A Winlink client's banner gets a B2F-style error and a hang-up
+    instead of the BBS prompt."""
+    cfg, store, bulletins = bbs
+    store.save_message("W1AAA", "W1XYZ", "for you", b"your mail")
+    u = Session("W1XYZ", cfg, store, bulletins)
+    out = u.cmd("[RMS Express-1.7.10.0-B2FHM$]")
+    u.t.join(timeout=5)
+    assert not u.t.is_alive()
+    assert "*** This BBS does not offer Winlink (B2F)" in out
+    assert len(store.get_messages_for("W1XYZ")) == 1        # still waiting
 
 
 def test_s_holds_for_rf_and_sw_queues_for_winlink(bbs):

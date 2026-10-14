@@ -553,7 +553,7 @@ class BBSStatusPanel(QWidget):
             Q_ARG(str, event.source), Q_ARG(str, call), Q_ARG(str, stype))
 
     def _on_session_ended(self, event):
-        """Fired when the interactive/B2F session object closes."""
+        """Fired when the interactive session object closes."""
         call = (event.data or {}).get("remote_call", "")
         from PyQt6.QtCore import QMetaObject, Q_ARG
         QMetaObject.invokeMethod(self, "_remove_active_session",

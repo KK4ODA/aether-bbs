@@ -390,7 +390,7 @@ def self_test() -> int:
         "aether": "aprs control launcher monitor websocket",
         "aprs": "gateway",
         "ax25": "parser router",
-        "bbs": "access b2f bulletins converse dispatcher filestore interactive "
+        "bbs": "access bulletins converse dispatcher filestore interactive "
                "mode_policy rate_limiter store",
         "core": "config crypto events logging_manager paths updater util version",
         "delivery": "config inbound",

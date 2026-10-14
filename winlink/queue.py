@@ -39,8 +39,8 @@ class OutboundQueue:
     Only messages explicitly sent to Winlink are queued: the RF ``SW``
     command, an internet (@) address, or the sysop choosing Winlink when
     writing or replying in the GUI (see :func:`route_new_message`).  Mail
-    for a station that collects it over RF, received bulletins, inbound
-    email and B2F mail are never sent to the CMS.
+    for a station that collects it over RF, received bulletins and inbound
+    email are never sent to the CMS.
     """
 
     def __init__(self, store: MessageStore, local_callsign: str = ""):

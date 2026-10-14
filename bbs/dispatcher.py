@@ -4,7 +4,7 @@ bbs/dispatcher.py
 Session Dispatcher.
 Listens for SESSION_CONNECTED events from all VARA FM instances,
 reads the first line to determine session type, then hands off to
-the appropriate handler (B2F or Interactive).
+the appropriate handler (forwarding or interactive).
 """
 
 import queue
@@ -18,7 +18,6 @@ from core.events import EventBus, EventType
 from vara.instance_manager import ModemInstanceManager
 from vara.mux import VARAFMMux
 from bbs.store import MessageStore
-from bbs.b2f import B2FSession
 from bbs.interactive import InteractiveSession
 from bbs.bulletins import BulletinStore
 from bbs.filestore import FileStore
@@ -45,9 +44,7 @@ class InstanceSessionHandler:
         self.instance_name = instance_name
         self._bus          = event_bus
         self._line_queue:  queue.Queue[str] = queue.Queue()
-        self._raw_queue:   queue.Queue[bytes] = queue.Queue()
         self._buf          = b""
-        self._raw_mode     = False   # True while B2F is receiving binary body
         self._active_session: Optional[InteractiveSession] = None
         self._lock         = threading.Lock()
 
@@ -64,17 +61,7 @@ class InstanceSessionHandler:
     def on_data(self, data: bytes):
         """Called by VARAFMMux when data arrives from the remote station."""
         log.info(f"[{self.instance_name}] RX {len(data)} bytes: {data[:80]!r}")
-        if self._raw_mode:
-            # B2F is receiving binary message body — route only to raw queue
-            self._raw_queue.put(data)
-            if self._bus:
-                self._bus.emit(EventType.DATA_RX, source=self.instance_name,
-                               data={"raw": True, "bytes": len(data)})
-            return
         self._buf += data
-        # NOTE: do NOT put data in _raw_queue here — that queue is exclusively
-        # for binary B2F body transfers (_raw_mode=True).  Putting line-mode
-        # data there as well causes B2F sessions to see duplicate/corrupt data.
         # Split into lines and feed to interactive session if active
         while b"\r" in self._buf or b"\n" in self._buf:
             for sep in (b"\r\n", b"\r", b"\n"):
@@ -104,19 +91,6 @@ class InstanceSessionHandler:
         except queue.Empty:
             return None
 
-    def recv_raw(self, n_bytes: int, timeout: float = 120) -> bytes:
-        """Read exactly n_bytes from raw queue."""
-        result = b""
-        deadline = threading.Event()
-        while len(result) < n_bytes:
-            try:
-                chunk = self._raw_queue.get(timeout=1.0)
-                result += chunk
-            except queue.Empty:
-                if not self.mux.state.name == "CONNECTED":
-                    break
-        return result[:n_bytes]
-
     def send_text(self, text: str):
         self.mux.send_data(text.encode("utf-8", errors="replace"))
         if self._bus:
@@ -130,18 +104,6 @@ class InstanceSessionHandler:
                         source=self.instance_name,
                         data={"text": display, "raw": False},
                     )
-
-    def send_bytes(self, data: bytes):
-        self.mux.send_data(data)
-        if self._bus:
-            self._bus.emit(EventType.DATA_TX, source=self.instance_name,
-                           data={"raw": True, "bytes": len(data)})
-
-    def set_raw_mode(self, enabled: bool):
-        """Switch between line mode and raw binary mode for incoming data."""
-        self._raw_mode = enabled
-        if not enabled:
-            self._buf = b""  # discard any partial line buffer
 
     def set_active_session(self, session: Optional[InteractiveSession]):
         with self._lock:
@@ -436,10 +398,7 @@ class SessionDispatcher:
                              "session_type": "Interactive"})
         try:
             # Start the interactive session immediately so the banner and
-            # welcome message are transmitted without delay.  B2F detection
-            # is handled inside the interactive session: if the remote sends
-            # a "[WL2K...]" line as their first command, the session hands
-            # off to a B2F handler transparently.
+            # welcome message are transmitted without delay.
             log.info(f"[{instance_name}] Starting interactive session with {remote_call}")
             self._run_interactive_session(handler, remote_call, instance_name, mux)
         except Exception as e:
@@ -487,32 +446,6 @@ class SessionDispatcher:
             mux.release_session(handler)
             handler.set_active_session(None)
 
-    def _run_b2f_session(
-        self,
-        handler: InstanceSessionHandler,
-        remote_call: str,
-        first_line: str,
-        mux: VARAFMMux,
-    ):
-        session = B2FSession(
-            bbs_callsign=self._config.station.bbs_callsign,
-            store=self._store,
-            send_fn=handler.send_text,
-            recv_fn=handler.recv_line,
-            recv_raw=handler.recv_raw,
-            send_raw_fn=handler.send_bytes,
-            set_raw_mode=handler.set_raw_mode,
-            bulletin_store=self._bbs,
-            remote_call=remote_call,
-        )
-        session.run(first_line=first_line)
-        # Send DISCONNECT so VARA (or the simulator) issues a DISCONNECTED
-        # response, which interface.py turns into a SESSION_DISCONNECTED event.
-        # Without this the simulator tab never sees the session end and its
-        # B2F/scenario buttons remain disabled.
-        if mux is not None:
-            mux.send_cmd("DISCONNECT")
-
     def _run_interactive_session(
         self,
         handler: InstanceSessionHandler,
@@ -520,23 +453,6 @@ class SessionDispatcher:
         instance_name: str,
         mux,
     ):
-        # Build the B2F handoff callable.
-        # WL2K clients are routed to the local B2F session handler.
-        # (CMS gateway bridging is now handled by Pat externally.)
-        def b2f_handoff(first_line: str):
-            log.info(
-                f"[{instance_name}] Switching to B2F "
-                f"for {remote_call}"
-            )
-            self._bus.emit(
-                EventType.SESSION_STARTED, source=instance_name,
-                data={"remote_call": remote_call,
-                      "session_type": "B2F"},
-            )
-            self._run_b2f_session(
-                handler, remote_call, first_line, mux,
-            )
-
         # Resolve transport label for this instance
         transport_label = "VARA_FM"
         for inst in self._live_config.instances:
@@ -556,7 +472,6 @@ class SessionDispatcher:
             disconnect_fn=lambda: mux.send_cmd("DISCONNECT"),
             bulletin_store=self._bbs,
             file_store=self._files,
-            b2f_handoff_fn=b2f_handoff,
             access_controller=self._access,
             mode_policy=self._policy,
             rate_limiter=self._rate_limiter,

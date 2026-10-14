@@ -1,7 +1,7 @@
 """
 tests/test_core.py
 
-Unit tests for config, AX.25 parser, B2F helpers, message store,
+Unit tests for config, AX.25 parser, message store,
 bulletin board, and APRS passcode.
 No VARA FM hardware or network required.
 """
@@ -140,47 +140,6 @@ class TestAX25Parser:
         assert format_connect_path("") == ""
         assert format_connect_path("WIDE1-1") == "WIDE1-1"
         assert format_connect_path("W1DEF-1,W2GHI-2") == "W1DEF-1,W2GHI-2"
-
-
-# ── B2F protocol tests ────────────────────────────────────────────────────────
-
-class TestB2F:
-
-    def test_challenge_response(self):
-        from bbs.b2f import B2FSession
-        # Known test vector
-        challenge = 12345678
-        response = B2FSession._compute_response(challenge)
-        assert isinstance(response, str)
-        assert response.isdigit()
-
-    def test_challenge_response_deterministic(self):
-        from bbs.b2f import B2FSession
-        r1 = B2FSession._compute_response(99999999)
-        r2 = B2FSession._compute_response(99999999)
-        assert r1 == r2
-
-    def test_parse_callsign_from_banner(self):
-        from bbs.b2f import B2FSession
-        call = B2FSession._parse_callsign("[W9XYZ-3.0-B2FWISP-2.4.1.0]")
-        assert call == "W9XYZ"
-
-    def test_parse_fs_all_accept(self):
-        from bbs.b2f import B2FSession
-        flags = B2FSession._parse_fs("FS +++", 3)
-        assert flags == ["+", "+", "+"]
-
-    def test_parse_fs_mixed(self):
-        from bbs.b2f import B2FSession
-        flags = B2FSession._parse_fs("FS +=", 2)
-        assert flags == ["+", "="]
-
-    def test_parse_fs_too_few_chars_padded(self):
-        from bbs.b2f import B2FSession
-        flags = B2FSession._parse_fs("FS +", 3)
-        assert len(flags) == 3
-        assert flags[0] == "+"
-        assert flags[1] == "="  # padded
 
 
 # ── Message store tests ───────────────────────────────────────────────────────
