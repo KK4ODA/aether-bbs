@@ -2937,27 +2937,40 @@ class SettingsTab(QScrollArea):
             "ptt":             d.get("ptt", PTTConfig()),
             "rig_control":     d.get("rig_control", RigControlConfig()),
             "soundmodem":      d.get("soundmodem", SoundmodemConfig()),
-            "aether":          self._aether_for_save(d.get("aether", AetherConfig())),
+            "aether":          self._aether_for_save(
+                d.get("aether", AetherConfig()),
+                (d.get("_base") or InstanceConfig()).aether.control_token),
             "host":            d.get("host", "127.0.0.1"),
             "auto_start":      d.get("auto_start", False),
             "enabled":         d.get("enabled", True),
         }
 
-    def _aether_for_save(self, ae: AetherConfig) -> AetherConfig:
+    def _aether_for_save(self, ae: AetherConfig, previous: str = "") -> AetherConfig:
         """Encrypt the control token before it is written to the config."""
-        machine = self._config.security.machine_secret
-        if (ae.control_token and machine
-                and not ae.control_token.startswith("ENC:")):
-            from core.crypto import encrypt_value
-            ae = ae.model_copy(update={"control_token": encrypt_value(
-                ae.control_token, machine)})
+        if ae.control_token and not ae.control_token.startswith("ENC:"):
+            ae = ae.model_copy(update={"control_token": self._encrypt_secret(
+                ae.control_token, previous)})
         return ae
 
-    def _encrypt_winlink_password(self, plaintext: str) -> str:
-        """Encrypt a password or token for storage in the config file."""
-        from core.crypto import encrypt_value
+    def _encrypt_secret(self, plaintext: str, previous: str = "") -> str:
+        """Encrypt a password or token for the config file.  *previous* is
+        the value saved now: when it holds the same secret it is kept, so an
+        unchanged secret is not re-encrypted (with a new random salt) and
+        does not look changed to the BBS (an Aether instance was restarted
+        on every Save)."""
+        from core.crypto import ENC_PREFIX, decrypt_value, encrypt_value
         machine = self._config.security.machine_secret
+        if previous.startswith(ENC_PREFIX) and machine:
+            try:
+                if decrypt_value(previous, machine) == plaintext:
+                    return previous
+            except Exception:
+                pass
         return encrypt_value(plaintext, machine)
+
+    def _saved(self) -> AppConfig:
+        """The settings as saved now (before this Save)."""
+        return self._cm.current() or self._config
 
     def _browse_pat_exe(self):
         """Open file dialog to select pat.exe."""
@@ -3155,8 +3168,9 @@ class SettingsTab(QScrollArea):
                 port=ie_vals.get("port", 993),
                 use_ssl=ie_vals.get("use_ssl", True),
                 username=ie_vals.get("username", ""),
-                password=self._encrypt_winlink_password(
-                    ie_vals.get("password", "")),
+                password=self._encrypt_secret(
+                    ie_vals.get("password", ""),
+                    self._saved().outbound_delivery.inbound_email.password),
                 folder=ie_vals.get("folder", "INBOX"),
                 bbs_domain=ie_vals.get("bbs_domain", ""),
                 poll_interval=ie_vals.get("poll_interval", 5),
@@ -3565,8 +3579,9 @@ class SettingsTab(QScrollArea):
             winlink=WinlinkConfig(
                 enabled=self._wl_enabled.isChecked(),
                 gateway_callsign=self._wl_callsign.text().strip().upper(),
-                gateway_password=self._encrypt_winlink_password(
-                    self._wl_password.text()),
+                gateway_password=self._encrypt_secret(
+                    self._wl_password.text(),
+                    self._saved().winlink.gateway_password),
                 grid_square=self._wl_grid.text().strip(),
                 pat_exe_path=self._wl_pat_exe.text().strip(),
                 pat_http_addr=self._wl_pat_addr.text().strip() or "localhost:8080",

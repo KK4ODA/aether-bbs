@@ -246,3 +246,31 @@ def test_settings_that_need_a_restart_are_named():
         "Inbound email", "Bulletin forwarding (neighbours and server)",
         "APRS (turning it on)", "Enabling modem instance HF",
         "New modem instance VHF", "Update check interval"]
+
+
+def test_an_unchanged_secret_is_saved_unchanged(qapp, tmp_path):
+    """Each Save re-encrypted every secret with a new salt, so it always
+    looked changed: an Aether instance with a control token was restarted
+    on every Save."""
+    cm, tab = _tab(tmp_path, '[[instances]]\nname = "HF"\n')
+    tab._inst_mode.setCurrentText("AETHER_HF")
+    tab._inst_ae_token.setText("tok123")
+    tab._ie_tab.widgets["password"].setText("imap-pw")
+    tab._wl_password.setText("wl-pw")
+    first = tab._build_config()
+    cm.save(first)
+
+    from core.events import EventBus
+    from gui.settings import SettingsTab
+    again = SettingsTab(cm, cm.load(), EventBus())
+    second = again._build_config()
+    assert second.instances[0].aether == first.instances[0].aether
+    assert second.outbound_delivery.inbound_email == first.outbound_delivery.inbound_email
+    assert second.winlink.gateway_password == first.winlink.gateway_password
+
+    again._ie_tab.widgets["password"].setText("new-pw")
+    third = again._build_config()
+    assert third.outbound_delivery.inbound_email.password != \
+        first.outbound_delivery.inbound_email.password
+    assert third.outbound_delivery.inbound_email.decrypt_password(
+        third.security.machine_secret) == "new-pw"
