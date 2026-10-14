@@ -81,3 +81,58 @@ def test_imap_marks_read_only_what_it_handled(poller, monkeypatch, fail):
     else:
         assert fake.flags == ["\\Seen"]
         assert store.list_messages(to_call="KK4ODA")
+
+
+def _timers():
+    import threading
+    return [t for t in threading.enumerate()
+            if isinstance(t, threading.Timer) and t.is_alive()]
+
+
+def test_enabling_inbound_email_on_save_starts_polling(tmp_path):
+    """The poller was started only if inbound email was on at startup, so
+    turning it on in Settings did nothing until a restart."""
+    from types import SimpleNamespace
+    import main
+    cfg = AppConfig()
+    cfg.bbs.message_dir = str(tmp_path / "messages")
+    store = MessageStore(cfg)
+    store.initialize()
+    app = main.BBSApplication.__new__(main.BBSApplication)
+    app._inbound_applied = None
+    app.forward_manager = inbound.WinlinkForwardManager()
+    app.inbound_email = InboundEmailPoller(store, EventBus())
+    app._apply_internet_email(cfg)
+    app.inbound_email.start()                       # as at startup: off
+    assert app.inbound_email._timer is None
+
+    on = cfg.model_copy(deep=True)
+    on.outbound_delivery.inbound_email.enabled = True
+    on.outbound_delivery.inbound_email.host = "imap.example.org"
+    on.winlink.forward_calls = ["W1AW"]
+    app._on_config_changed_email(SimpleNamespace(data={"config": on}))
+    try:
+        assert app.inbound_email._enabled and app.inbound_email._timer is not None
+        assert app.inbound_email._host == "imap.example.org"
+        assert app.forward_manager._manual_calls == ["W1AW"]
+        timer = app.inbound_email._timer
+        app._on_config_changed_email(SimpleNamespace(data={"config": on}))
+        assert app.inbound_email._timer is timer     # unchanged: timer kept
+        off = on.model_copy(deep=True)
+        off.outbound_delivery.inbound_email.enabled = False
+        app._on_config_changed_email(SimpleNamespace(data={"config": off}))
+        assert app.inbound_email._timer is None
+    finally:
+        app.inbound_email.stop()
+
+
+def test_a_config_change_during_a_poll_leaves_one_poll_timer(poller):
+    p, _, _ = poller
+    p.start()
+    try:
+        p.update_config(enabled=True, protocol="IMAP", host="mail.invalid")
+        p._schedule_next()          # the running poll finishing afterwards
+        mine = [t for t in _timers() if t.function == p._auto_poll_tick]
+        assert len(mine) == 1
+    finally:
+        p.stop()

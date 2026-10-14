@@ -233,6 +233,9 @@ class InboundEmailPoller:
     # ── Internal ─────────────────────────────────────────────────────────────
 
     def _schedule_next(self):
+        # one timer only: a config change during a poll must not leave two
+        # poll chains running
+        self._cancel_timer()
         if not self._running or not self._enabled:
             return
         delay = self._poll_interval * 60 + random.uniform(-15, 15)

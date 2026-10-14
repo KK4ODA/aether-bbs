@@ -311,11 +311,6 @@ def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
     """The changed settings, from *old* to *new*, that the running BBS
     only picks up when it is restarted (one label per area)."""
     areas = []
-    od_old, od_new = old.outbound_delivery, new.outbound_delivery
-    if od_old.inbound_email != od_new.inbound_email:
-        areas.append("Inbound email")
-    if od_old.winlink_forward != od_new.winlink_forward:
-        areas.append("Winlink forward list")
     if (old.bbs.forwarding_neighbours != new.bbs.forwarding_neighbours
             or old.bbs.forwarding != new.bbs.forwarding):
         areas.append("Bulletin forwarding (neighbours and server)")

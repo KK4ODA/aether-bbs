@@ -56,6 +56,7 @@ class BBSApplication:
         self.cms_poller        = None
         self.cms_notifier      = None
         self.inbound_email     = None
+        self._inbound_applied  = None   # inbound email settings in use
         self.forward_manager   = None
         self.ntfy_notifier     = None
         self.pushover_notifier = None
@@ -154,14 +155,6 @@ class BBSApplication:
 
         # Winlink forward manager — dynamically builds ;FW list
         self.forward_manager = WinlinkForwardManager(event_bus=self.event_bus)
-        wl = self.config.winlink
-        od = self.config.outbound_delivery
-        self.forward_manager.update_config(
-            gateway_callsign=wl.gateway_callsign,
-            manual_calls=wl.forward_calls,
-            mode=od.winlink_forward.mode,
-            max_calls=od.winlink_forward.max_calls,
-        )
         self.forward_manager.set_access_controller(self.access_controller)
         self.forward_manager.set_message_store(self.message_store)
         self.cms_poller.set_forward_manager(self.forward_manager)
@@ -172,22 +165,7 @@ class BBSApplication:
             event_bus=self.event_bus,
         )
         self.inbound_email.set_access_controller(self.access_controller)
-        ie_cfg = od.inbound_email
-        self.inbound_email.update_config(
-            enabled=ie_cfg.enabled,
-            protocol=ie_cfg.protocol,
-            host=ie_cfg.host,
-            port=ie_cfg.port,
-            use_ssl=ie_cfg.use_ssl,
-            username=ie_cfg.username,
-            password=ie_cfg.decrypt_password(self.config.security.machine_secret),
-            folder=ie_cfg.folder,
-            bbs_domain=ie_cfg.bbs_domain,
-            poll_interval=ie_cfg.poll_interval,
-            delete_after_fetch=ie_cfg.delete_after_fetch,
-            max_message_size=ie_cfg.max_message_size,
-            allowed_senders=ie_cfg.allowed_senders,
-        )
+        self._apply_internet_email(self.config)
 
         # Push notification backends — subscribe to PRIORITY_MESSAGE_RECEIVED
         self.ntfy_notifier = NtfyNotifier(self.config_manager, self.event_bus)
@@ -238,8 +216,8 @@ class BBSApplication:
             self.aprs_gateway.start()
         if self.cms_poller:
             self.cms_poller.start()
-        if self.inbound_email and self.config.outbound_delivery.inbound_email.enabled:
-            self.inbound_email.start()
+        if self.inbound_email:
+            self.inbound_email.start()      # polls only while enabled
 
         # --- Subscribe to config changes for live-updatable settings ---
         # vara_cmd_log can be toggled without a restart
@@ -256,6 +234,11 @@ class BBSApplication:
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
             self._on_config_changed_security,
+        )
+        # Inbound email and the Winlink forward list
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            self._on_config_changed_email,
         )
         # Restart instances whose rig_control or transport changed
         self.event_bus.subscribe(
@@ -300,6 +283,41 @@ class BBSApplication:
             forward_calls=wl.forward_calls,
             cms_timeout=wl.cms_timeout,
         )
+
+    def _apply_internet_email(self, cfg):
+        """Push the inbound email and Winlink forward-list settings in
+        (at startup, and live on every Save)."""
+        wl, od = cfg.winlink, cfg.outbound_delivery
+        self.forward_manager.update_config(
+            gateway_callsign=wl.gateway_callsign,
+            manual_calls=wl.forward_calls,
+            mode=od.winlink_forward.mode,
+            max_calls=od.winlink_forward.max_calls,
+        )
+        ie = od.inbound_email
+        if ie == self._inbound_applied:
+            return          # unchanged: keep the poll timer as it is
+        self._inbound_applied = ie
+        self.inbound_email.update_config(
+            enabled=ie.enabled,
+            protocol=ie.protocol,
+            host=ie.host,
+            port=ie.port,
+            use_ssl=ie.use_ssl,
+            username=ie.username,
+            password=ie.decrypt_password(cfg.security.machine_secret),
+            folder=ie.folder,
+            bbs_domain=ie.bbs_domain,
+            poll_interval=ie.poll_interval,
+            delete_after_fetch=ie.delete_after_fetch,
+            max_message_size=ie.max_message_size,
+            allowed_senders=ie.allowed_senders,
+        )
+
+    def _on_config_changed_email(self, event):
+        cfg = (event.data or {}).get("config")
+        if cfg and self.inbound_email:
+            self._apply_internet_email(cfg)
 
     def _on_config_changed_cms(self, event):
         """Update Pat client when config changes."""
