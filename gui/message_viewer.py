@@ -757,7 +757,10 @@ def speak(phrase: str, volume: float) -> str | None:
             cmd, extra = ["say", clean], {}
         else:
             cmd, extra = ["espeak", "-s", "140", clean], {}
-        r = subprocess.run(cmd, timeout=20, capture_output=True, **extra)
+        # stdin=DEVNULL: the installed app has no console, and PowerShell
+        # started with no usable stdin can hang instead of speaking.
+        r = subprocess.run(cmd, timeout=20, capture_output=True,
+                           stdin=subprocess.DEVNULL, **extra)
         if r.returncode == 0:
             return None
         detail = (r.stderr or r.stdout).decode(errors="replace").strip()

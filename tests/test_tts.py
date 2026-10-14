@@ -17,6 +17,8 @@ def test_spoken_returns_none():
     with mock.patch("subprocess.run", return_value=_done()) as run:
         assert speak("Hello", 0.5) is None
     assert "Hello" in " ".join(run.call_args.args[0])
+    # The windowed app has no console; PowerShell must not wait on stdin.
+    assert run.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
 
 def test_failure_is_reported_with_the_first_error_line():
