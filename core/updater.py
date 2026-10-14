@@ -503,23 +503,48 @@ class Updater:
     def _run_windows_setup(self, setup: Path, folder: Path):
         """Run the setup silently after this process exits, then start the
         new version.  A small batch file waits for the BBS to quit so the
-        installer can replace its files."""
+        installer can replace its files; it notes each step in update.log
+        (and the installer its own in setup.log) next to the setup."""
         exe = Path(sys.executable)
-        script = folder / "run-update.cmd"
-        script.write_text(
-            "@echo off\r\n"
-            ":wait\r\n"
-            f'tasklist /FI "PID eq {os.getpid()}" 2>nul | find "{os.getpid()}" >nul '
+        pid = os.getpid()
+        log_file = folder / "update.log"
+        note = f'>>"{log_file}" echo %date% %time%'
+        lines = [
+            "@echo off",
+            "chcp 65001 >nul",          # the paths below are UTF-8
+            "setlocal",
+            f"{note} Waiting for Aether BBS (process {pid}) to quit",
+            "set tries=0",
+            ":wait",
+            # the full path: another find.exe (Git, Cygwin) may come first
+            f'tasklist /FI "PID eq {pid}" /NH 2>nul '
+            f'| "%SystemRoot%\\System32\\find.exe" " {pid} " >nul || goto quit',
+            "set /a tries+=1",
+            # a BBS that hangs on the way out would hold the update forever
+            f'if %tries% geq 60 (taskkill /F /PID {pid} >nul 2>&1 & {note} '
+            f'Aether BBS did not quit in time; stopped it)',
             # ping, not timeout: timeout fails without a console
-            "&& (ping -n 2 127.0.0.1 >nul & goto wait)\r\n"
-            f'"{setup}" /SILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL\r\n'
-            f'start "" "{exe}"\r\n',
-            encoding="utf-8")
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+            "ping -n 2 127.0.0.1 >nul",
+            "goto wait",
+            ":quit",
+            f'{note} Running "{setup.name}"',
+            f'call "{setup}" /SILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL '
+            f'/LOG="{folder / "setup.log"}"',
+            f"{note} Setup finished with code %errorlevel%",
+            f'start "" "{exe}"',
+            f'{note} Started "{exe}"',
+        ]
+        # newline="": the lines already end in CR LF; text mode on Windows
+        # would turn each into CR CR LF
+        with open(folder / "run-update.cmd", "w", encoding="utf-8", newline="") as f:
+            f.write("\r\n".join(lines) + "\r\n")
+        # A hidden console, not DETACHED_PROCESS: with no console at all every
+        # tasklist/find/ping the script runs would open a window of its own
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
             subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(["cmd", "/c", str(script)], creationflags=flags,
-                         close_fds=True, cwd=str(folder))
+        subprocess.Popen(["cmd", "/c", str(folder / "run-update.cmd")],
+                         creationflags=flags, close_fds=True, cwd=str(folder))
+        log.info("Update script started; it notes its steps in %s", log_file)
 
     def _replace_linux_app(self, archive: Path):
         """Swap the files of the app folder for the release's (Linux)."""
