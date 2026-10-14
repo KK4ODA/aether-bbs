@@ -1,6 +1,6 @@
 ; Inno Setup script for the Aether BBS Windows installer.
 ; Built by .github/workflows/installers.yml:
-;   iscc /DAppVersion=1.3.6 /DSourceDir=<dist\AetherBBS> /DOutputDir=<out>
+;   iscc /DAppVersion=1.3.7 /DSourceDir=<dist\AetherBBS> /DOutputDir=<out>
 ;        /DIconFile=<aether-bbs.ico> /DLicenseFile=<LICENSE> aether-bbs.iss
 ;
 ; Installs for the current user by default (no administrator prompt), so the
@@ -23,7 +23,7 @@ DefaultDirName={autopf}\Aether BBS
 DefaultGroupName=Aether BBS
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequiredOverridesAllowed=commandline dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
