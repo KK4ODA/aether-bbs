@@ -92,7 +92,6 @@ class PatClient:
         self._poll_thread: Optional[threading.Thread] = None
         self._last_result: Optional[PollResult] = None
         self._queue:  Optional['OutboundQueue'] = None
-        self._forward_manager = None
 
         # Pat process management
         self._pat_proc: Optional[subprocess.Popen] = None
@@ -334,10 +333,6 @@ class PatClient:
     @property
     def outbound_queue(self) -> Optional['OutboundQueue']:
         return self._queue
-
-    def set_forward_manager(self, mgr) -> None:
-        """Inject the WinlinkForwardManager for dynamic ;FW list building."""
-        self._forward_manager = mgr
 
     # ── Pat process management ───────────────────────────────────────────
 

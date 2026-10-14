@@ -28,7 +28,7 @@ from aprs.gateway import APRSGateway
 from gui.mainwindow import MainWindow
 from winlink.pat_client import PatClient
 from winlink.notify import CMSNotifier
-from delivery.inbound import InboundEmailPoller, WinlinkForwardManager
+from delivery.inbound import InboundEmailPoller
 from notifications.ntfy import NtfyNotifier
 from notifications.pushover import PushoverNotifier
 from notifications.sms import SMSNotifier
@@ -57,7 +57,6 @@ class BBSApplication:
         self.cms_notifier      = None
         self.inbound_email     = None
         self._inbound_applied  = None   # inbound email settings in use
-        self.forward_manager   = None
         self.ntfy_notifier     = None
         self.pushover_notifier = None
         self.sms_notifier      = None
@@ -178,12 +177,6 @@ class BBSApplication:
         # CMS notification hooks
         self.cms_notifier = CMSNotifier(self.event_bus)
 
-        # Winlink forward manager — dynamically builds ;FW list
-        self.forward_manager = WinlinkForwardManager(event_bus=self.event_bus)
-        self.forward_manager.set_access_controller(self.access_controller)
-        self.forward_manager.set_message_store(self.message_store)
-        self.cms_poller.set_forward_manager(self.forward_manager)
-
         # Inbound email poller — IMAP/POP3 polling for email→RF delivery
         self.inbound_email = InboundEmailPoller(
             store=self.message_store,
@@ -277,7 +270,7 @@ class BBSApplication:
             EventType.CONFIG_CHANGED,
             self._on_config_changed_aprs,
         )
-        # Inbound email and the Winlink forward list
+        # Inbound email
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
             self._on_config_changed_email,
@@ -325,16 +318,9 @@ class BBSApplication:
         )
 
     def _apply_internet_email(self, cfg):
-        """Push the inbound email and Winlink forward-list settings in
-        (at startup, and live on every Save)."""
-        wl, od = cfg.winlink, cfg.outbound_delivery
-        self.forward_manager.update_config(
-            gateway_callsign=wl.gateway_callsign,
-            manual_calls=wl.forward_calls,
-            mode=od.winlink_forward.mode,
-            max_calls=od.winlink_forward.max_calls,
-        )
-        ie = od.inbound_email
+        """Push the inbound email settings in (at startup, and live on
+        every Save)."""
+        ie = cfg.outbound_delivery.inbound_email
         if ie == self._inbound_applied:
             return          # unchanged: keep the poll timer as it is
         self._inbound_applied = ie
