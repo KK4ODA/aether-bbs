@@ -214,61 +214,6 @@ class OutboundDeliveryTab:
 # most Winlink configuration.  This extended version adds the
 # transport selector for future CMS API support.
 
-class WinlinkDeliveryTab:
-    """Extended Winlink settings with transport selector."""
-
-    def __init__(self, config):
-        self._config = config
-        self.widgets = {}
-
-    def build(self) -> QWidget:
-        cfg = self._config.winlink
-        w = QWidget()
-        form = QFormLayout(w)
-
-        # ── Transport selector ───────────────────────────────────────────
-        transport_group = QGroupBox("Winlink Transport")
-        tg_form = QFormLayout(transport_group)
-
-        self.widgets["transport_type"] = QComboBox()
-        self.widgets["transport_type"].addItems([
-            "Pat Client",
-        ])
-        self.widgets["transport_type"].setCurrentIndex(0)
-
-        tg_form.addRow("Transport:", self.widgets["transport_type"])
-
-        # ── Status indicator ─────────────────────────────────────────────
-        self.widgets["transport_status"] = QLabel("⚪ Not connected")
-        self.widgets["transport_status"].setStyleSheet(
-            "font-family: monospace; padding: 4px;"
-        )
-        tg_form.addRow("Status:", self.widgets["transport_status"])
-
-        # ── Test button ──────────────────────────────────────────────────
-        self.widgets["test_btn"] = QPushButton("Test Winlink Connection")
-        tg_form.addRow("", self.widgets["test_btn"])
-
-        form.addRow(transport_group)
-
-        # ── Info ─────────────────────────────────────────────────────────
-        info = QLabel(
-            "Winlink delivery uses Pat (getpat.io) to communicate\n"
-            "with the Winlink CMS via internet (telnet/TLS).\n"
-            "\n"
-            "Pat is the primary delivery method for all messages.\n"
-            "SMTP providers (if configured) are used as fallback\n"
-            "for email addresses when Winlink CMS is unavailable."
-        )
-        info.setStyleSheet("color:#aaa; font-size:9pt;")
-        info.setWordWrap(True)
-        form.addRow(info)
-
-        return w
-
-    def get_transport_type(self) -> str:
-        return "PAT_CLIENT"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tab 3: SMTP Providers (master-detail with quick-add presets)

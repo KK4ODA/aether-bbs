@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 
 from core.events import EventBus, EventType
-from ax25.parser import AX25Frame, parse_callsign, parse_path
+from ax25.parser import AX25Frame, parse_callsign
 
 log = logging.getLogger(__name__)
 pkt_log = logging.getLogger("packet")
@@ -75,35 +75,3 @@ class PacketRouter:
         )
         log.debug(f"Heard station: {addr} via [{instance}]")
 
-    def validate_inbound_path(
-        self,
-        path_str: str,
-        max_hops: int = 2,
-    ) -> bool:
-        """
-        Validate an inbound connect path.
-        Logs a warning for excessively long paths.
-        """
-        if not path_str:
-            return True
-        addrs = parse_path(path_str)
-        if len(addrs) > max_hops:
-            log.warning(
-                f"Inbound connection has {len(addrs)}-hop path "
-                f"(max {max_hops}): {path_str}"
-            )
-            return False
-        return True
-
-    def build_connect_path(self, raw_path: str) -> str:
-        """
-        Validate and normalise an outbound connect path.
-        Returns empty string for direct connects.
-        """
-        if not raw_path or not raw_path.strip():
-            return ""
-        addrs = parse_path(raw_path)
-        if not addrs:
-            log.warning(f"Invalid connect path: {raw_path!r}")
-            return ""
-        return ",".join(str(a) for a in addrs)

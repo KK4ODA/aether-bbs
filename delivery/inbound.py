@@ -83,10 +83,6 @@ def extract_callsign_from_email(address: str, domain: str = "") -> Optional[str]
     return None
 
 
-def build_email_address(callsign: str, domain: str) -> str:
-    """Build an email address from a callsign and BBS domain."""
-    return f"{callsign.lower()}@{domain.lower()}"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # IMAP/POP3 Email Poller
@@ -231,10 +227,6 @@ class InboundEmailPoller:
     @property
     def is_enabled(self) -> bool:
         return self._enabled
-
-    @property
-    def last_stats(self) -> Optional[InboundEmailStats]:
-        return self._last_stats
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
@@ -868,14 +860,3 @@ class WinlinkForwardManager:
 
         return []
 
-    def get_forward_count(self) -> int:
-        """Return the current count of callsigns in the forward list."""
-        return len(self.build_forward_list())
-
-    def get_mode_description(self) -> str:
-        """Return a human-readable description of the current mode."""
-        return {
-            ForwardListMode.MANUAL: "Manual — only explicitly configured callsigns",
-            ForwardListMode.AUTO_APPROVED: "Auto (Approved+) — all approved, trusted, and sysop users",
-            ForwardListMode.AUTO_ALL: "Auto (All) — all registered users except blocked",
-        }.get(self._mode, "Unknown")

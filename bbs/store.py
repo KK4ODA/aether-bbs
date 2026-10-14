@@ -378,30 +378,9 @@ class MessageStore:
             row = cur.fetchone()
             return row[0] if row else 0
 
-    def set_cms_queued(self, mid: str):
-        """Mark a message as queued for CMS delivery."""
-        self.set_cms_status(mid, MessageStatus.QUEUED)
-
     def set_cms_failed(self, mid: str, reason: str = ""):
         """Mark a message as failed CMS delivery."""
         self.set_cms_status(mid, MessageStatus.FAILED, notes=reason)
-
-    def get_outbox(self, limit: int = 200) -> list[dict]:
-        """
-        Return messages in the outbox (sent or pending CMS delivery).
-        Includes cms_status and cms_attempts for status display.
-        """
-        with self._lock:
-            cur = self._conn.execute(
-                """SELECT id, from_call, to_call, subject, date, area,
-                          is_read, is_sent, is_replied, priority,
-                          cms_status, cms_attempts
-                   FROM messages
-                   WHERE cms_status != '' AND cms_status != 'RECEIVED'
-                   ORDER BY date DESC LIMIT ?""",
-                (limit,),
-            )
-            return [dict(r) for r in cur.fetchall()]
 
     def get_messages_by_cms_status(self, status: str, limit: int = 50) -> list[dict]:
         """Get messages with a specific CMS delivery status."""

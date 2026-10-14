@@ -614,7 +614,6 @@ STATE_COLORS = {
     "busy":         "#E67E22",
     "ptt":          RED,
     "idle":         BLUE,
-    "simulator":    BLUE,
 }
 
 # ── Disabled widget style (dark-theme safe) ────────────────────────────────

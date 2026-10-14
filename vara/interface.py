@@ -216,10 +216,6 @@ class VARAFMInterface:
         except queue.Empty:
             return None
 
-    def wait_for_connection(self, timeout: float = 30.0) -> bool:
-        """Block until an RF session connects or timeout."""
-        return self._connected_event.wait(timeout=timeout)
-
     # ── Internal ──────────────────────────────────────────────────────────
 
     def _init_vara(self):

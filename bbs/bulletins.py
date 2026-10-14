@@ -56,25 +56,6 @@ class BulletinStore:
     is_bulletin=1 (new column added via migration) and to_call being a group name.
     """
 
-    MIGRATION = """
-    ALTER TABLE messages ADD COLUMN is_bulletin INTEGER NOT NULL DEFAULT 0;
-    CREATE INDEX IF NOT EXISTS idx_messages_bulletin ON messages(is_bulletin, area);
-    CREATE TABLE IF NOT EXISTS bulletin_seen (
-        mid         TEXT NOT NULL,
-        bbs_call    TEXT NOT NULL,
-        seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (mid, bbs_call)
-    );
-    CREATE TABLE IF NOT EXISTS forwarding_log (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        neighbour   TEXT    NOT NULL,
-        direction   TEXT    NOT NULL,   -- 'sent' or 'received'
-        mid         TEXT    NOT NULL,
-        timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
-        success     INTEGER NOT NULL DEFAULT 1
-    );
-    """
-
     def __init__(self, store: MessageStore):
         self._store = store
         self._apply_migration()
