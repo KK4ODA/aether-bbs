@@ -85,8 +85,10 @@ def test_imap_marks_read_only_what_it_handled(poller, monkeypatch, fail):
 
 def _timers():
     import threading
+    # a cancelled timer's thread lingers until it wakes: count live ones
     return [t for t in threading.enumerate()
-            if isinstance(t, threading.Timer) and t.is_alive()]
+            if isinstance(t, threading.Timer) and t.is_alive()
+            and not t.finished.is_set()]
 
 
 def test_enabling_inbound_email_on_save_starts_polling(tmp_path):
