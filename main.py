@@ -432,7 +432,7 @@ def self_test() -> int:
         "ax25": "parser router",
         "bbs": "access bulletins converse dispatcher filestore interactive "
                "mode_policy rate_limiter store",
-        "core": "config crypto events logging_manager paths updater util version",
+        "core": "config crypto events logging_manager paths reconnect updater util version",
         "delivery": "config inbound",
         "gui": "aether_heard bbs_panel bulletins_tab chat_window delivery_tabs "
                "files_tab log_viewer mainwindow message_viewer messages_tab "
