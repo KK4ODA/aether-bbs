@@ -26,16 +26,18 @@ def fs(tmp_path):
     return store, tmp_path
 
 
-@pytest.mark.parametrize("area", ["../ESCAPE", "/ESCAPE", "..", "NOSUCHAREA"])
+@pytest.mark.parametrize("area", ["../ESCAPE", "<abs>", "..", "NOSUCHAREA"])
 @pytest.mark.parametrize("remote", [True, False])
 def test_upload_outside_a_registered_area_is_refused(fs, area, remote):
     store, root = fs
+    if area == "<abs>":
+        # an absolute path; inside the test folder, so a regression can't
+        # write anywhere else on the machine running the tests
+        area = str(root / "elsewhere")
     ok, reason = store.commit_upload(area, "note.txt", "N0CALL", "", b"hello\n",
                                      is_remote=remote)
     assert not ok and "Unknown file area" in reason
-    written = [p for p in root.rglob("note.txt")]
-    assert written == []
-    assert not Path("/ESCAPE").exists()
+    assert list(root.rglob("note.txt")) == []
 
 
 def test_upload_to_a_registered_area_works(fs):
