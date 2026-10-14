@@ -3500,7 +3500,7 @@ class SettingsTab(QScrollArea):
             if c.strip()
         ]
 
-        return AppConfig(
+        built = AppConfig(
             station=StationConfig(
                 bbs_callsign=self._bbs_call.text(),
                 sysop_callsign=self._sysop_call.text(),
@@ -3644,3 +3644,7 @@ class SettingsTab(QScrollArea):
             ),
             instances=instances,
         )
+        # Keep settings this tab has no widget for (message_dir, routing
+        # overrides, log rotation sizes ...) at their current values
+        from core.config import overlay
+        return overlay(self._cm.current() or self._config, built)

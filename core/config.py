@@ -491,6 +491,23 @@ def _get_delivery_config_class():
 # ── Config path resolution ────────────────────────────────────────────────────
 
 APP_NAME          = "Aether BBS"
+def overlay(base: BaseModel, update: BaseModel) -> BaseModel:
+    """Return *base* with the fields *update* was explicitly given laid over
+    it, recursing into nested sections.  Fields *update* never set keep
+    *base*'s values, so a form that edits only some of a section's settings
+    doesn't reset the rest (values kept only in the TOML file, say)."""
+    data = base.model_dump()
+    for name in update.model_fields_set:
+        new_val = getattr(update, name)
+        old_val = getattr(base, name, None)
+        if (isinstance(new_val, BaseModel) and isinstance(old_val, BaseModel)
+                and type(new_val) is type(old_val)):
+            data[name] = overlay(old_val, new_val)
+        else:
+            data[name] = new_val
+    return type(base).model_validate(data)
+
+
 CONFIG_DIR_NAME   = "aether-bbs"
 CONFIG_FILE_NAME  = "aether_bbs.toml"
 # Names used before the rebrand from VARA BBS — read once and migrated.
