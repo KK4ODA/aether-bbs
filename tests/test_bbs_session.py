@@ -44,9 +44,19 @@ class Session:
         time.sleep(0.3)
 
     def cmd(self, line, wait=0.3):
+        """Send *line*; return what the session sent back once it has
+        been quiet for *wait* seconds (at most 10 s: CI runners are slow)."""
         mark = len(self.out)
         self.s.feed_line(line)
-        time.sleep(wait)
+        seen, quiet_since, deadline = mark, time.time(), time.time() + 10
+        while time.time() < deadline:
+            time.sleep(0.05)
+            if len(self.out) != seen:
+                seen, quiet_since = len(self.out), time.time()
+            elif time.time() - quiet_since >= wait and seen > mark:
+                break
+            elif time.time() - quiet_since >= max(wait, 1.0):
+                break
         return "".join(self.out[mark:])
 
     def close(self):
