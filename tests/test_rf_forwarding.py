@@ -321,3 +321,76 @@ def test_bulletin_cut_off_mid_body_is_not_stored(tmp_path):
     BulletinForwarder(cfg, store, bbs, EventBus())._receive_bulletin(send, recv, "MID0001", nbr)
     assert not store.has_message("MID0001")
     assert not any(s.startswith("FWD ACK") for s in sent)
+
+
+def _saved(tmp_path, cfg):
+    from core.config import ConfigManager
+    cm = ConfigManager(tmp_path / "aether_bbs.toml")
+    cm.save(cfg)
+    return cm
+
+
+def _fwd_servers():
+    return [t for t in threading.enumerate() if t.name == "FwdServer" and t.is_alive()]
+
+
+def test_forwarding_server_follows_a_save(tmp_path):
+    """The server and its neighbour list were read once at startup."""
+    import socket
+    from bbs.bulletins import BulletinForwardingServer
+    cfg, store, bbs = _stores(tmp_path, "s")
+    cm = _saved(tmp_path, cfg)
+    server = BulletinForwardingServer(cm, store, bbs, EventBus())
+    server.start()                                    # disabled: no listener
+    before = len(_fwd_servers())
+    try:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        on = cm.current().model_copy(deep=True)
+        on.bbs.forwarding.server_enabled = True
+        on.bbs.forwarding.server_port = port
+        on.bbs.forwarding.server_bind = "127.0.0.1"
+        on.bbs.forwarding_neighbours = [ForwardingNeighbourConfig(bbs_callsign="W2BBB-10")]
+        cm.save(on)
+        server.apply_config()
+        socket.create_connection(("127.0.0.1", port), timeout=2).close()
+        assert len(_fwd_servers()) == before + 1
+
+        send, recv, sent = _scripted(["FWD HELLO W2BBB-10"])   # a new neighbour
+        assert server.serve(send=send, recv=recv) is True
+        server.apply_config()                         # nothing changed
+        assert len(_fwd_servers()) == before + 1
+
+        moved = cm.current().model_copy(deep=True)
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            moved.bbs.forwarding.server_port = s.getsockname()[1]
+        cm.save(moved)
+        server.apply_config()
+        socket.create_connection(("127.0.0.1", moved.bbs.forwarding.server_port),
+                                 timeout=2).close()
+        assert _wait(lambda: len(_fwd_servers()) == before + 1)   # old one gone
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+    finally:
+        server.stop()
+
+
+def test_a_save_does_not_make_every_neighbour_due(tmp_path):
+    """When each neighbour was last called was kept on the neighbour's
+    config object, which a Save replaces: every Save would have called
+    every neighbour again at once."""
+    from bbs.bulletins import BulletinForwarder
+    cfg, store, bbs = _stores(tmp_path, "a")
+    cfg.bbs.forwarding_neighbours = [ForwardingNeighbourConfig(bbs_callsign="W2BBB-10")]
+    cm = _saved(tmp_path, cfg)
+    fwd = BulletinForwarder(cm, store, bbs, EventBus())
+    nbr = cm.current().bbs.forwarding_neighbours[0]
+    assert fwd._is_due(nbr)
+    fwd._mark_called(nbr)
+    # Settings builds a fresh config from its widgets
+    edited = AppConfig.model_validate(cm.current().model_dump())
+    edited.bbs.welcome_message = "hello"
+    cm.save(edited)
+    assert not fwd._is_due(cm.current().bbs.forwarding_neighbours[0])

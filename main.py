@@ -105,11 +105,14 @@ class BBSApplication:
         self.file_store.initialize()
 
         self.bulletin_store = BulletinStore(self.message_store)
+        # given the ConfigManager, both follow Settings → Save
         self.bulletin_forwarder = BulletinForwarder(
-            self.config, self.message_store, self.bulletin_store, self.event_bus
+            self.config_manager, self.message_store, self.bulletin_store,
+            self.event_bus,
         )
         self.bulletin_server = BulletinForwardingServer(
-            self.config, self.message_store, self.bulletin_store, self.event_bus
+            self.config_manager, self.message_store, self.bulletin_store,
+            self.event_bus,
         )
 
         self.instance_manager = ModemInstanceManager(
@@ -234,6 +237,12 @@ class BBSApplication:
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
             self._on_config_changed_security,
+        )
+        # Bulletin forwarding: the server listens again if its settings
+        # changed (neighbours are read live)
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            lambda e: (e.data or {}).get("config") and self.bulletin_server.apply_config(),
         )
         # Inbound email and the Winlink forward list
         self.event_bus.subscribe(

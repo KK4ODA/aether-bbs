@@ -243,7 +243,6 @@ def test_settings_that_need_a_restart_are_named():
     new.outbound_delivery.inbound_email.host = "imap.example.org"
     new.bbs.welcome_message = "hello"              # live: not listed
     assert restart_needed(old, new) == [
-        "Bulletin forwarding (neighbours and server)",
         "APRS (turning it on)", "Enabling modem instance HF",
         "New modem instance VHF"]
 

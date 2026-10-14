@@ -311,9 +311,6 @@ def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
     """The changed settings, from *old* to *new*, that the running BBS
     only picks up when it is restarted (one label per area)."""
     areas = []
-    if (old.bbs.forwarding_neighbours != new.bbs.forwarding_neighbours
-            or old.bbs.forwarding != new.bbs.forwarding):
-        areas.append("Bulletin forwarding (neighbours and server)")
     if new.aprs.enabled and not old.aprs.enabled:
         areas.append("APRS (turning it on)")
     before = {i.name: i for i in old.instances}
