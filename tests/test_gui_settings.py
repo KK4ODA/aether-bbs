@@ -107,3 +107,20 @@ def test_overlay_keeps_unset_fields_and_replaces_lists():
     out = overlay(base, upd)
     assert (out.bbs.message_dir, out.bbs.session_timeout) == ("X:/m", 300)
     assert [i.name for i in out.instances] == ["C"]
+
+
+def test_check_for_updates_reports_back(qapp, tmp_path, monkeypatch):
+    """The manual check runs on a worker thread; its result must reach the
+    tab (it used to stay at "Checking ..." with the button disabled)."""
+    import time
+    from core.updater import Updater, UpdateCheckResult
+    monkeypatch.setattr(Updater, "check_for_updates",
+                        lambda self, manual=False: UpdateCheckResult(current_version="9.9.9"))
+    cm, tab = _tab(tmp_path, '[[instances]]\nname = "VHF"\n')
+    tab._on_check_updates()
+    deadline = time.time() + 5
+    while time.time() < deadline and not tab._upd_check_btn.isEnabled():
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert tab._upd_check_btn.isEnabled()
+    assert "Up to date" in tab._upd_status.text()

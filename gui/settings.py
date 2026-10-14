@@ -309,6 +309,7 @@ class ScanChannelDialog(QDialog):
 
 class SettingsTab(QScrollArea):
     settings_saved = pyqtSignal()
+    _update_checked = pyqtSignal(object)   # UpdateCheckResult, from a worker thread
 
     def __init__(self, cm: ConfigManager, config: AppConfig, bus: EventBus,
                  notifiers=None, delivery_engine=None, parent=None):
@@ -319,6 +320,7 @@ class SettingsTab(QScrollArea):
         self._dirty  = False
         self._notifiers = notifiers or {}
         self._delivery_engine = delivery_engine
+        self._update_checked.connect(self._on_check_result)
 
         container = QWidget()
         outer     = QVBoxLayout(container)
@@ -3358,10 +3360,10 @@ class SettingsTab(QScrollArea):
         )
 
         def _check():
-            result = updater.check_for_updates(manual=True)
-            # Schedule GUI update on main thread via QTimer
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._on_check_result(result))
+            # a signal reaches _on_check_result on the GUI thread (a
+            # QTimer.singleShot from this thread would never fire: it has
+            # no event loop)
+            self._update_checked.emit(updater.check_for_updates(manual=True))
 
         threading.Thread(target=_check, daemon=True, name="ManualUpdateCheck").start()
 
