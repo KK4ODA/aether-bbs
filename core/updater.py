@@ -484,8 +484,10 @@ class Updater:
         package.write_bytes(self._http_get(url, accept="*/*"))
 
         if sys.platform == "win32":
-            say("Starting the installer ...")
-            self._run_windows_setup(package, folder)
+            elevate = not self._can_write(Path(sys.executable).parent)
+            say("Asking Windows for permission to install ..." if elevate
+                else "Starting the installer ...")
+            self._run_windows_setup(package, folder, elevate=elevate)
             result.relaunch = False
         elif sys.platform == "darwin":
             dest = Path.home() / "Downloads" / name
@@ -500,11 +502,28 @@ class Updater:
             say("Installing ...")
             self._replace_linux_app(package)
 
-    def _run_windows_setup(self, setup: Path, folder: Path):
+    @staticmethod
+    def _can_write(folder: Path) -> bool:
+        """Whether this user may change files in *folder* (os.access only
+        looks at the read-only flag on Windows, so try it)."""
+        try:
+            with tempfile.TemporaryFile(dir=folder):
+                return True
+        except OSError:
+            return False
+
+    def _run_windows_setup(self, setup: Path, folder: Path, elevate: bool = False):
         """Run the setup silently after this process exits, then start the
         new version.  A small batch file waits for the BBS to quit so the
         installer can replace its files; it notes each step in update.log
-        (and the installer its own in setup.log) next to the setup."""
+        (and the installer its own in setup.log) next to the setup.
+
+        *elevate*: the BBS is installed for all users (Program Files), so the
+        setup needs administrator rights.  Windows is asked for them now,
+        while the BBS is in front: asked later, from the background, its
+        prompt only blinks in the taskbar and the update never runs.  The
+        new version is then started through Explorer, with the sysop's own
+        rights rather than the script's."""
         exe = Path(sys.executable)
         pid = os.getpid()
         log_file = folder / "update.log"
@@ -528,23 +547,48 @@ class Updater:
             "goto wait",
             ":quit",
             f'{note} Running "{setup.name}"',
+            # where it is now: Program Files (all users) or the user's own
             f'call "{setup}" /SILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL '
-            f'/LOG="{folder / "setup.log"}"',
+            f'{"/ALLUSERS" if elevate else "/CURRENTUSER"} /LOG="{folder / "setup.log"}"',
             f"{note} Setup finished with code %errorlevel%",
-            f'start "" "{exe}"',
+            f'explorer.exe "{exe}"' if elevate else f'start "" "{exe}"',
             f'{note} Started "{exe}"',
         ]
         # newline="": the lines already end in CR LF; text mode on Windows
         # would turn each into CR CR LF
         with open(folder / "run-update.cmd", "w", encoding="utf-8", newline="") as f:
             f.write("\r\n".join(lines) + "\r\n")
+        script = folder / "run-update.cmd"
+        if elevate:
+            self._run_elevated(script, folder)
+        else:
+            self._run_hidden(script, folder)
+        log.info("Update script started; it notes its steps in %s", log_file)
+
+    @staticmethod
+    def _run_hidden(script: Path, folder: Path):
         # A hidden console, not DETACHED_PROCESS: with no console at all every
         # tasklist/find/ping the script runs would open a window of its own
         flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
             subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(["cmd", "/c", str(folder / "run-update.cmd")],
+        subprocess.Popen(["cmd", "/c", str(script)],
                          creationflags=flags, close_fds=True, cwd=str(folder))
-        log.info("Update script started; it notes its steps in %s", log_file)
+
+    @staticmethod
+    def _run_elevated(script: Path, folder: Path):
+        """Start the script as administrator; Windows shows its prompt now."""
+        import ctypes
+        shell32 = ctypes.windll.shell32
+        shell32.ShellExecuteW.restype = ctypes.c_ssize_t
+        owner = ctypes.windll.user32.GetForegroundWindow()
+        # /s: cmd drops only the outer quotes, keeping the path's own
+        rc = shell32.ShellExecuteW(owner, "runas", "cmd.exe", f'/s /c ""{script}""',
+                                   str(folder), 0)       # 0: SW_HIDE
+        if rc <= 32:
+            raise UpdateError(
+                "Windows did not give permission to install the update "
+                f"(error {rc}).  Aether BBS is installed for all users, so "
+                "updating it needs an administrator's approval.")
 
     def _replace_linux_app(self, archive: Path):
         """Swap the files of the app folder for the release's (Linux)."""

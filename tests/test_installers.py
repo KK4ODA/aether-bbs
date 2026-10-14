@@ -112,6 +112,7 @@ def test_windows_runs_setup_after_the_bbs_quits(tmp_path, monkeypatch):
     check = up.check_for_updates()
     monkeypatch.setattr(updater_mod.sys, "platform", "win32")
     monkeypatch.setattr(updater_mod.sys, "executable", r"C:\Apps\Aether BBS\AetherBBS.exe")
+    monkeypatch.setattr(Updater, "_can_write", staticmethod(lambda folder: True))
     started = []
     monkeypatch.setattr(updater_mod.subprocess, "Popen",
                         lambda args, **kw: started.append(args))
@@ -129,6 +130,51 @@ def test_windows_runs_setup_after_the_bbs_quits(tmp_path, monkeypatch):
     raw = (tmp_path / "tmp" / "aether-bbs-update" / "run-update.cmd").read_bytes()
     assert b"\r\r\n" not in raw and raw.count(b"\r\n") == raw.count(b"\n")
     assert "update.log" in script and "setup.log" in script
+    assert "/CURRENTUSER" in script and "runas" not in script
+
+
+def test_windows_all_users_install_asks_for_permission_first(tmp_path, monkeypatch):
+    """Installed for all users (Program Files), the setup needs an
+    administrator.  Asked for from the background after the BBS had quit,
+    Windows' prompt only blinked in the taskbar and the update never ran;
+    now it is asked for while the BBS is still in front."""
+    up = _frozen_updater(tmp_path, monkeypatch, _release(), b"MZ setup")
+    check = up.check_for_updates()
+    monkeypatch.setattr(updater_mod.sys, "platform", "win32")
+    monkeypatch.setattr(updater_mod.sys, "executable",
+                        r"C:\Program Files\Aether BBS\AetherBBS.exe")
+    monkeypatch.setattr(Updater, "_can_write", staticmethod(lambda folder: False))
+    elevated = []
+    monkeypatch.setattr(Updater, "_run_elevated",
+                        staticmethod(lambda script, folder: elevated.append(script)))
+    monkeypatch.setattr(updater_mod.subprocess, "Popen",
+                        lambda *a, **kw: pytest.fail("started without permission"))
+
+    r = up.apply_update(check)
+    assert r.success and r.relaunch is False, r.error
+    script = elevated[0].read_text(encoding="utf-8")
+    assert "/ALLUSERS" in script
+    # started with the sysop's own rights, not the administrator's
+    assert r'explorer.exe "C:\Program Files\Aether BBS\AetherBBS.exe"' in script
+    assert 'start ""' not in script
+
+
+def test_windows_update_is_called_off_when_permission_is_refused(tmp_path, monkeypatch):
+    up = _frozen_updater(tmp_path, monkeypatch, _release(), b"MZ setup")
+    check = up.check_for_updates()
+    monkeypatch.setattr(updater_mod.sys, "platform", "win32")
+    monkeypatch.setattr(Updater, "_can_write", staticmethod(lambda folder: False))
+
+    def refuse(script, folder):
+        raise updater_mod.UpdateError("Windows did not give permission")
+    monkeypatch.setattr(Updater, "_run_elevated", staticmethod(refuse))
+    r = up.apply_update(check)
+    assert not r.success and "permission" in r.error   # the BBS keeps running
+
+
+def test_can_write_tries_the_folder(tmp_path):
+    assert Updater._can_write(tmp_path)
+    assert not Updater._can_write(tmp_path / "missing")
 
 
 WINDOWS_BBS = """
