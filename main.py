@@ -72,13 +72,30 @@ class BBSApplication:
         self._shutdown_lock    = threading.Lock()
 
     def start(self, app: QApplication) -> int:
-        # --- Load configuration ---
+        """Bring the BBS up, in dependency order, then run the GUI."""
+        self._load_config()
+        self._open_store_and_security()   # everything below uses the store
+        self._build_bulletins_and_modems()
+        self._build_dispatcher()
+        self._build_internet_links()      # APRS-IS, Winlink, inbound email
+        self._build_notifiers()
+        self._install_shutdown_handlers()
+        self._build_gui()                 # shown before the services start
+        self._start_services()
+        self._follow_config_changes()
+        self._start_updater()             # needs the main window
+        log.info("All subsystems started")
+        return app.exec()
+
+    def _load_config(self):
+        """Settings and logging."""
         self.config = self.config_manager.load()
         setup_logging(self.config.logging)
         log.info("Aether BBS starting up")
         log.info(f"BBS callsign: {self.config.station.bbs_callsign}")
 
-        # --- Initialise subsystems ---
+    def _open_store_and_security(self):
+        """The message store, access control, mode policy and rate limits."""
         self.message_store = MessageStore(self.config, event_bus=self.event_bus)
         self.message_store.initialize()
 
@@ -97,6 +114,8 @@ class BBSApplication:
             multiplier=self.mode_policy.rate_limit_multiplier
         )
 
+    def _build_bulletins_and_modems(self):
+        """File and bulletin stores, forwarding, the modem instances."""
         # Bulletin board — always initialised (zero cost if unused)
         self.file_store = FileStore(
             self.config_manager, event_bus=self.event_bus,
@@ -121,6 +140,8 @@ class BBSApplication:
         # RF neighbours are called through the modem instances
         self.bulletin_forwarder.set_instance_manager(self.instance_manager)
 
+    def _build_dispatcher(self):
+        """Chat rooms and the session dispatcher."""
         # Multi-user chat room manager
         from bbs.converse import ConversationManager
         self.converse_manager = ConversationManager(self.event_bus)
@@ -136,6 +157,8 @@ class BBSApplication:
             converse_manager=self.converse_manager,
         )
 
+    def _build_internet_links(self):
+        """APRS-IS, Winlink (Pat) and inbound email."""
         # always built (it connects only once started) so that turning
         # APRS on in Settings needs no restart
         self.aprs_gateway = APRSGateway(self.config_manager, self.event_bus)
@@ -169,6 +192,8 @@ class BBSApplication:
         self.inbound_email.set_access_controller(self.access_controller)
         self._apply_internet_email(self.config)
 
+    def _build_notifiers(self):
+        """Push and SMS notification backends."""
         # Push notification backends — subscribe to PRIORITY_MESSAGE_RECEIVED
         self.ntfy_notifier = NtfyNotifier(self.config_manager, self.event_bus)
         self.pushover_notifier = PushoverNotifier(self.config_manager, self.event_bus)
@@ -180,7 +205,8 @@ class BBSApplication:
             self.config_manager, self.event_bus
         )
 
-        # --- Register shutdown handlers ---
+    def _install_shutdown_handlers(self):
+        """Ctrl+C, SIGTERM, SHUTDOWN and atexit."""
         # Ctrl+C, SIGTERM and the window's Quit end the Qt event loop;
         # main() shuts the subsystems down after it returns, so no GUI timer
         # can run against a closed database.  atexit is the fallback.
@@ -189,7 +215,8 @@ class BBSApplication:
         signal.signal(signal.SIGTERM, lambda *_: self._quit_app())
         self.event_bus.subscribe(EventType.SHUTDOWN, lambda _e: self._quit_app())
 
-        # --- Build GUI ---
+    def _build_gui(self):
+        """The main window."""
         self.main_window = MainWindow(
             self.config_manager,
             self.config,
@@ -209,7 +236,8 @@ class BBSApplication:
         )
         self.main_window.show()
 
-        # --- Start background services ---
+    def _start_services(self):
+        """Start the background services."""
         self.instance_manager.start_all()
         self.dispatcher.start()
         self.bulletin_forwarder.start()
@@ -221,7 +249,8 @@ class BBSApplication:
         if self.inbound_email:
             self.inbound_email.start()      # polls only while enabled
 
-        # --- Subscribe to config changes for live-updatable settings ---
+    def _follow_config_changes(self):
+        """Apply Settings → Save to the running services."""
         # vara_cmd_log can be toggled without a restart
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
@@ -259,7 +288,8 @@ class BBSApplication:
             self._on_config_changed_instances,
         )
 
-        # --- Software updater ---
+    def _start_updater(self):
+        """The software updater."""
         from core.updater import Updater
         self.updater = Updater(
             repo_dir=install_dir(),
@@ -276,9 +306,6 @@ class BBSApplication:
             self.updater.check_once_async()
         if self.config.updater.auto_check_interval_hours > 0:
             self.updater.start_periodic_check()
-
-        log.info("All subsystems started")
-        return app.exec()
 
     def _apply_winlink_config(self, cfg):
         """Push Winlink config into the Pat client."""
