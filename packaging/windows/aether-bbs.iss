@@ -1,6 +1,6 @@
 ; Inno Setup script for the Aether BBS Windows installer.
 ; Built by .github/workflows/installers.yml:
-;   iscc /DAppVersion=1.3.3 /DSourceDir=<dist\AetherBBS> /DOutputDir=<out>
+;   iscc /DAppVersion=1.3.4 /DSourceDir=<dist\AetherBBS> /DOutputDir=<out>
 ;        /DIconFile=<aether-bbs.ico> /DLicenseFile=<LICENSE> aether-bbs.iss
 ;
 ; Installs for the current user by default (no administrator prompt), so the
