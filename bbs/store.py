@@ -164,7 +164,8 @@ class MessageStore:
             ("messages", "priority",   "INTEGER NOT NULL DEFAULT 0"),
             ("messages", "cms_status", "TEXT NOT NULL DEFAULT ''"),
             ("messages", "cms_attempts", "INTEGER NOT NULL DEFAULT 0"),
-            # ── Outbound delivery architecture columns ────────────────────
+            # ── Columns of the removed SMTP fallback (unused, kept so older
+            #    versions can still open the database) ──────────────────
             ("messages", "delivery_status",           "TEXT NOT NULL DEFAULT ''"),
             ("messages", "delivery_backend_selected", "TEXT NOT NULL DEFAULT ''"),
             ("messages", "delivery_state",            "TEXT NOT NULL DEFAULT ''"),

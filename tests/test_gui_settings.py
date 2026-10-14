@@ -85,8 +85,6 @@ def test_save_keeps_settings_the_tab_has_no_widget_for(qapp, tmp_path):
         '[bbs]\nmessage_dir = "D:/bbsdata/messages"\n'
         '[aprs]\nbeacon_symbol = "\\\\k"\n'
         '[logging]\nmax_bytes = 100000\nbackup_count = 9\n'
-        '[[outbound_delivery.routing_overrides]]\n'
-        'pattern = "@example.org"\nbackend = "SMTP"\n'
         '[[instances]]\nname = "VHF"\n'
     ))
     tab._welcome.setText("edited welcome")
@@ -95,7 +93,6 @@ def test_save_keeps_settings_the_tab_has_no_widget_for(qapp, tmp_path):
     assert cfg.bbs.welcome_message == "edited welcome"      # the edit applies
     assert cfg.aprs.beacon_symbol == "\\k"
     assert (cfg.logging.max_bytes, cfg.logging.backup_count) == (100000, 9)
-    assert [o.pattern for o in cfg.outbound_delivery.routing_overrides] == ["@example.org"]
 
 
 def test_overlay_keeps_unset_fields_and_replaces_lists():
@@ -164,3 +161,20 @@ def test_revert_puts_the_saved_values_back_in_the_form(qapp, tmp_path, monkeypat
     assert cfg.updater.auto_check_interval_hours == 12
     assert cfg.instances[0].name == "HF"
     assert tab._pages.count() == pages          # rebuilt, not duplicated
+
+
+def test_old_smtp_fallback_settings_are_purged_from_disk(tmp_path):
+    """The SMTP fallback is gone; its plain-text provider passwords must not
+    stay in the file, and the inbound email settings beside them must."""
+    from core.config import ConfigManager
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text(
+        '[outbound_delivery]\nengine_enabled = true\n'
+        '[outbound_delivery.inbound_email]\nhost = "imap.example.org"\n'
+        '[outbound_delivery.smtp]\nenabled = true\n'
+        '[[outbound_delivery.smtp.providers]]\nhost = "smtp.example.org"\n'
+        'password = "hunter2"\n', encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert cfg.outbound_delivery.inbound_email.host == "imap.example.org"
+    text = path.read_text(encoding="utf-8")
+    assert "hunter2" not in text and "smtp" not in text

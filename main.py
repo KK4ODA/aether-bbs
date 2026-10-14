@@ -28,7 +28,6 @@ from aprs.gateway import APRSGateway
 from gui.mainwindow import MainWindow
 from winlink.pat_client import PatClient
 from winlink.notify import CMSNotifier
-from delivery.engine import DeliveryEngine
 from delivery.inbound import InboundEmailPoller, WinlinkForwardManager
 from notifications.ntfy import NtfyNotifier
 from notifications.pushover import PushoverNotifier
@@ -56,7 +55,6 @@ class BBSApplication:
         self.aprs_gateway      = None
         self.cms_poller        = None
         self.cms_notifier      = None
-        self.delivery_engine   = None
         self.inbound_email     = None
         self.forward_manager   = None
         self.ntfy_notifier     = None
@@ -154,14 +152,6 @@ class BBSApplication:
         # CMS notification hooks
         self.cms_notifier = CMSNotifier(self.event_bus)
 
-        # Outbound delivery engine — three-tier failover architecture
-        self.delivery_engine = DeliveryEngine(
-            store=self.message_store,
-            event_bus=self.event_bus,
-        )
-        self.delivery_engine.set_cms_poller(self.cms_poller)
-        self.delivery_engine.update_config(self.config)
-
         # Winlink forward manager — dynamically builds ;FW list
         self.forward_manager = WinlinkForwardManager(event_bus=self.event_bus)
         wl = self.config.winlink
@@ -236,7 +226,6 @@ class BBSApplication:
                 "pushover": self.pushover_notifier,
                 "sms": self.sms_notifier,
             },
-            delivery_engine=self.delivery_engine,
         )
         self.main_window.show()
 
@@ -249,8 +238,6 @@ class BBSApplication:
             self.aprs_gateway.start()
         if self.cms_poller:
             self.cms_poller.start()
-        if self.delivery_engine and self.config.outbound_delivery.engine_enabled:
-            self.delivery_engine.start()
         if self.inbound_email and self.config.outbound_delivery.inbound_email.enabled:
             self.inbound_email.start()
 
@@ -380,8 +367,6 @@ class BBSApplication:
                 self.aprs_gateway.stop()
             if self.cms_poller:
                 self.cms_poller.stop()
-            if self.delivery_engine:
-                self.delivery_engine.stop()
             if self.inbound_email:
                 self.inbound_email.stop()
             if self.instance_manager:
@@ -408,7 +393,7 @@ def self_test() -> int:
         "bbs": "access b2f bulletins converse dispatcher filestore interactive "
                "mode_policy rate_limiter store",
         "core": "config crypto events logging_manager paths updater util version",
-        "delivery": "backends config engine inbound models",
+        "delivery": "config inbound",
         "gui": "aether_heard bbs_panel bulletins_tab chat_window delivery_tabs "
                "files_tab log_viewer mainwindow message_viewer messages_tab "
                "modem_panel packet_monitor session_sounds settings theme "

@@ -72,7 +72,6 @@ class MainWindow(QMainWindow):
         cms_poller=None,
         access_controller=None,
         notifiers=None,
-        delivery_engine=None,
     ):
         super().__init__()
         self._cm      = config_manager
@@ -85,7 +84,6 @@ class MainWindow(QMainWindow):
         self._cms_poller = cms_poller
         self._access  = access_controller
         self._notifiers = notifiers or {}
-        self._delivery_engine = delivery_engine
         self._bus     = event_bus
 
         self._bridge  = EventSignalBridge(self)
@@ -200,8 +198,7 @@ class MainWindow(QMainWindow):
         # ── Tab 3: Settings (unchanged) ───────────────────────────────
         self._tabs.addTab(
             SettingsTab(self._cm, self._config, self._bus,
-                       notifiers=self._notifiers,
-                       delivery_engine=self._delivery_engine, parent=self),
+                       notifiers=self._notifiers, parent=self),
             "Settings"
         )
 

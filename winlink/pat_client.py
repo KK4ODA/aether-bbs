@@ -76,8 +76,8 @@ class PatClient:
     sending.
 
     Public interface is compatible with the former CMSPoller so that
-    WinlinkBackend, WinlinkPanel, main.py, and CONFIG_CHANGED handlers
-    work without structural changes.
+    WinlinkPanel, main.py, and CONFIG_CHANGED handlers work without
+    structural changes.
     """
 
     def __init__(
@@ -220,12 +220,6 @@ class PatClient:
         )
         t.start()
 
-    def poll_now_blocking(self) -> Optional[PollResult]:
-        """Trigger an immediate CMS sync, blocking until complete."""
-        if not self._enabled:
-            return None
-        return self._do_poll()
-
     def poll_for_user(self, callsign: str, password: str,
                       extra_addresses: list[tuple[str, str]] | None = None,
                       ) -> PollResult:
@@ -328,40 +322,6 @@ class PatClient:
 
         finally:
             self._lock.release()
-
-    def send_message(self, to_addr: str, subject: str, body: str,
-                     from_addr: str = "") -> SendResult:
-        """
-        Send a single message via Pat compose + CMS sync.
-
-        Args:
-            to_addr:  Recipient (callsign or email)
-            subject:  Message subject
-            body:     Message body text
-            from_addr: Optional sender override (tactical address)
-
-        Returns SendResult with success/error.
-        """
-        start = time.monotonic()
-
-        # Compose the message in Pat's outbox
-        compose_result = self._compose_message(to_addr, subject, body, from_addr)
-        if not compose_result.success:
-            return compose_result
-
-        # Sync with CMS to actually push it
-        synced = self._sync_cms()
-        duration = time.monotonic() - start
-
-        if synced:
-            return SendResult(success=True, duration=duration)
-        else:
-            # Message is queued in Pat even if sync failed — it'll go next time
-            return SendResult(
-                success=True,
-                error="Message queued in Pat but CMS sync failed — will retry",
-                duration=duration,
-            )
 
     @property
     def is_enabled(self) -> bool:

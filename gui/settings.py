@@ -312,14 +312,13 @@ class SettingsTab(QScrollArea):
     _update_checked = pyqtSignal(object)   # UpdateCheckResult, from a worker thread
 
     def __init__(self, cm: ConfigManager, config: AppConfig, bus: EventBus,
-                 notifiers=None, delivery_engine=None, parent=None):
+                 notifiers=None, parent=None):
         super().__init__(parent)
         self._cm     = cm
         self._config = config
         self._bus    = bus
         self._dirty  = False
         self._notifiers = notifiers or {}
-        self._delivery_engine = delivery_engine
         self._update_checked.connect(self._on_check_result)
 
         container = QWidget()
@@ -2991,21 +2990,7 @@ class SettingsTab(QScrollArea):
                 msg = f"Cannot connect to Pat at {addr}:\n{err}"
             QMessageBox.warning(self, "Pat Connection", msg)
 
-    # ── Outbound Delivery settings tabs ─────────────────────────────────────
-
-    def _delivery_tab(self) -> QWidget:
-        from gui.delivery_tabs import OutboundDeliveryTab
-        self._od_tab = OutboundDeliveryTab(self._config)
-        w = self._od_tab.build()
-        if self._delivery_engine:
-            self._od_tab.set_delivery_engine(self._delivery_engine)
-            self._od_tab.start_health_timer()
-        return w
-
-    def _smtp_providers_tab(self) -> QWidget:
-        from gui.delivery_tabs import SMTPProvidersTab
-        self._smtp_tab = SMTPProvidersTab(self._config)
-        return self._smtp_tab.build()
+    # ── Internet email settings tabs ────────────────────────────────────────
 
     def _inbound_email_tab(self) -> QWidget:
         from gui.delivery_tabs import InboundEmailTab
@@ -3120,38 +3105,8 @@ class SettingsTab(QScrollArea):
 
     def _build_outbound_delivery_config(self):
         from delivery.config import (
-            OutboundDeliveryConfig, SMTPDeliveryConfig,
-            SMTPProviderModel,
-            InboundEmailConfig, WinlinkForwardConfig,
+            OutboundDeliveryConfig, InboundEmailConfig, WinlinkForwardConfig,
         )
-
-        # Get values from the delivery tab widgets
-        od_vals = {}
-        if hasattr(self, "_od_tab"):
-            od_vals = self._od_tab.get_config_values()
-
-        # Get SMTP providers from the SMTP tab
-        smtp_providers = []
-        if hasattr(self, "_smtp_tab"):
-            for pd in self._smtp_tab.get_providers():
-                smtp_providers.append(SMTPProviderModel(
-                    provider_id=pd["provider_id"],
-                    display_name=pd["display_name"],
-                    host=pd["host"],
-                    port=pd["port"],
-                    tls_mode=pd["tls_mode"],
-                    username=pd["username"],
-                    password=pd["password"],
-                    sender_email=pd["sender_email"],
-                    sender_name=pd["sender_name"],
-                    enabled=pd["enabled"],
-                    priority=pd["priority"],
-                    failure_threshold=pd.get("failure_threshold", 3),
-                    max_attempts=pd.get("max_attempts", 5),
-                ))
-
-        # Get MTA config from the MTA tab
-
 
         # Get inbound email config
         ie_vals = {}
@@ -3164,13 +3119,6 @@ class SettingsTab(QScrollArea):
             wf_vals = self._wf_tab.get_config_values()
 
         return OutboundDeliveryConfig(
-            engine_enabled=od_vals.get("engine_enabled", False),
-            engine_poll_seconds=od_vals.get("engine_poll_seconds", 30),
-            message_expiry_days=od_vals.get("message_expiry_days", 7),
-            smtp=SMTPDeliveryConfig(
-                enabled=od_vals.get("smtp_enabled", False),
-                providers=smtp_providers,
-            ),
             inbound_email=InboundEmailConfig(
                 enabled=ie_vals.get("enabled", False),
                 protocol=ie_vals.get("protocol", "IMAP"),
@@ -3356,11 +3304,9 @@ class SettingsTab(QScrollArea):
             "CONNECTIVITY",
             ("Winlink (Pat)",      self._winlink_tab,       False),
             ("APRS",               self._aprs_tab,          False),
-            "DELIVERY",
-            ("Outbound Delivery",  self._delivery_tab,      False),
-            ("  SMTP Fallback",    self._smtp_providers_tab,  True),
-            ("  Inbound Email Fallback", self._inbound_email_tab, True),
-            ("  Winlink Fwd Mgr",  self._winlink_forward_tab, True),
+            "INTERNET EMAIL",
+            ("Inbound Email",      self._inbound_email_tab, False),
+            ("Winlink Fwd Mgr",    self._winlink_forward_tab, False),
             "SECURITY & OPS",
             ("Security",           self._security_tab,      False),
             ("Alerts",             self._alerts_tab,        False),
