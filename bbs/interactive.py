@@ -142,6 +142,11 @@ class InteractiveSession:
             self.remote_call == config.station.sysop_callsign.upper()
         )
         self._b2f_handoff = b2f_handoff_fn
+        # Set once the RF link is gone: every prompt then ends at once
+        self._link_down = False
+        # Area of the last L / LB, so R/K and RB/KB number the same list
+        self._list_area: Optional[str] = None
+        self._bulletin_area: Optional[str] = None
         self._role = None  # set during access gate in run()
         self._tactical_call: Optional[str] = None  # active tactical address for session
 
@@ -324,7 +329,7 @@ class InteractiveSession:
 
             while self._running:
                 line = self._get_line(timeout=timeout)
-                if line is _RF_DISCONNECTED:
+                if self._link_down:
                     log.info(f"[{self.instance_name}] RF disconnected: {self.remote_call}")
                     break  # link is gone — do not attempt to send
                 if line is None:
@@ -486,6 +491,8 @@ class InteractiveSession:
             self._send(f";TRANSPORT {self._transport_label}\r\n")
             line = self._get_line(timeout=120)
 
+        if self._link_down:
+            return False   # the link dropped: not a failed password
         if line is None or not isinstance(line, str) or line is _RF_DISCONNECTED:
             self._send("Authentication timed out.\r\n")
             self._access.record_auth_failure(self.remote_call)
@@ -919,11 +926,16 @@ class InteractiveSession:
 
         self._show_prompt()
 
-    def _cmd_list(self, area: Optional[str] = None):
-        msgs = self._store.list_messages(
-            area=area, limit=100,
+    def _listed_messages(self) -> list[dict]:
+        """The messages L shows, in its order; R n and K n index this."""
+        return self._store.list_messages(
+            area=self._list_area, limit=100,
             to_call=None if self._is_sysop else self.remote_call,
         )
+
+    def _cmd_list(self, area: Optional[str] = None):
+        self._list_area = area
+        msgs = self._listed_messages()
         if not msgs:
             self._send("No messages.\r\n")
         else:
@@ -956,7 +968,7 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        msgs = self._store.list_messages(limit=100)
+        msgs = self._listed_messages()
         if idx < 0 or idx >= len(msgs):
             self._send("Message not found.\r\n")
             self._show_prompt()
@@ -1003,6 +1015,8 @@ class InteractiveSession:
             if line is None or line.strip() == ".":
                 break
             lines.append(line)
+        if self._link_down:
+            return   # link dropped before the end: don't post half a message
 
         body_text = "\r\n".join(lines)
         from_call = self._tactical_call or self.remote_call
@@ -1036,14 +1050,15 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        msgs = self._store.list_messages(limit=100)
+        msgs = self._listed_messages()
         if idx < 0 or idx >= len(msgs):
             self._send("Message not found.\r\n")
             self._show_prompt()
             return
 
         msg = msgs[idx]
-        if msg["from_call"].upper() != self.remote_call:
+        mine = self.remote_call in (msg["from_call"].upper(), msg["to_call"].upper())
+        if not (mine or self._is_sysop):
             self._send("You can only delete your own messages.\r\n")
             self._show_prompt()
             return
@@ -1092,6 +1107,7 @@ class InteractiveSession:
     def _cmd_list_bulletins(self, area: Optional[str] = None):
         if self._no_bulletins():
             return
+        self._bulletin_area = area
         bulletins = self._bbs.list_bulletins(area=area, limit=100)
         if not bulletins:
             msg = f"No bulletins" + (f" in area {area}." if area else ".") + "\r\n"
@@ -1130,7 +1146,7 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        bulletins = self._bbs.list_bulletins(limit=100)
+        bulletins = self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
         if idx < 0 or idx >= len(bulletins):
             self._send("Bulletin not found.\r\n")
             self._show_prompt()
@@ -1216,6 +1232,8 @@ class InteractiveSession:
             if line is None or line.strip() == ".":
                 break
             lines.append(line)
+        if self._link_down:
+            return   # link dropped before the end: don't post half a message
 
         if not lines:
             self._send("No body entered. Bulletin not saved.\r\n")
@@ -1265,7 +1283,7 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        bulletins = self._bbs.list_bulletins(limit=100)
+        bulletins = self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
         if idx < 0 or idx >= len(bulletins):
             self._send("Bulletin not found.\r\n")
             self._show_prompt()
@@ -1391,6 +1409,7 @@ class InteractiveSession:
                     continue
 
                 if line is _RF_DISCONNECTED:
+                    self._link_lost()
                     return
 
                 if line is None:
@@ -1547,12 +1566,13 @@ class InteractiveSession:
                 line = None
 
             if line is _RF_DISCONNECTED:
+                self._link_lost()
                 self._bus.emit(
                     EventType.CHAT_ENDED,
                     source=self.instance_name,
                     data={"remote_call": self.remote_call, "reason": "rf_disconnect"},
                 )
-                return  # outer session loop will handle RF cleanup
+                return
 
             if line is _SYSOP_CHAT_END:
                 self._send(
@@ -1649,8 +1669,15 @@ class InteractiveSession:
         if to_call == self.remote_call:
             self._pending_notify.set()
 
+    def _link_lost(self):
+        """The RF link dropped: end the session wherever it is."""
+        self._link_down = True
+        self._running = False
+
     def _get_line(self, timeout: float = 60):
-        """Return next line, _RF_DISCONNECTED on RF disconnect, or None on timeout.
+        """Return the next line, or None on timeout or once the RF link is
+        down (then self._link_down is set).  Any prompt reading through here
+        ends as soon as the link drops instead of waiting out its timeout.
         Polls every 2 seconds so mid-session notifications can be pushed
         immediately rather than waiting for the next command.
 
@@ -1679,10 +1706,15 @@ class InteractiveSession:
         deadline       = (time.monotonic() + timeout) if timeout is not None else None
         last_keepalive = time.monotonic()
 
+        if self._link_down:
+            return None
         while deadline is None or time.monotonic() < deadline:
             try:
                 val = self._rx_queue.get(timeout=POLL)
-                return val  # may be _RF_DISCONNECTED sentinel
+                if val is _RF_DISCONNECTED:
+                    self._link_lost()
+                    return None
+                return val
             except queue.Empty:
                 now = time.monotonic()
 
@@ -1909,6 +1941,11 @@ class InteractiveSession:
             return
         _, h_area, h_filename, h_size_str, h_crc = hparts[:5]
         h_desc = hparts[5] if len(hparts) > 5 else desc_hint
+        if h_area.upper() != area_hint:
+            # the area was checked above; the header must not name another
+            self._send(f"PUTFILE area {h_area.upper()} does not match {area_hint}.\r\n")
+            self._show_prompt()
+            return
         try:
             h_size = int(h_size_str)
         except ValueError:
@@ -1926,7 +1963,8 @@ class InteractiveSession:
         self._send("GO\r\n")   # signal client to start streaming
         buf = io.BytesIO()
         b64_chars = 0
-        expected_b64 = len(base64.b64encode(b"\x00" * h_size))  # rough upper bound
+        # base64 of h_size bytes, plus room for line padding
+        b64_limit = 4 * ((h_size + 2) // 3) + 1024
 
         while True:
             line = self._get_line(timeout=self._config.bbs.session_timeout)
@@ -1943,6 +1981,12 @@ class InteractiveSession:
                 break
             if line.upper() == "CANCEL":
                 self._send("Upload cancelled.\r\n")
+                self._show_prompt()
+                return
+            b64_chars += len(line)
+            if b64_chars > b64_limit:
+                # more than the declared size: stop before it fills memory
+                self._send(f"ERROR More data than the declared {h_size} bytes. Aborting.\r\n")
                 self._show_prompt()
                 return
             try:
