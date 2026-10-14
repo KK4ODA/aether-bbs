@@ -69,6 +69,7 @@ class BBSApplication:
         self.main_window       = None
         self.updater           = None
         self._shutdown_done    = False
+        self._relaunch         = False   # restart() asks main() to start us again
         self._shutdown_lock    = threading.Lock()
 
     def start(self, app: QApplication) -> int:
@@ -210,10 +211,13 @@ class BBSApplication:
         )
 
         # --- Register shutdown handlers ---
+        # Ctrl+C, SIGTERM and the window's Quit end the Qt event loop;
+        # main() shuts the subsystems down after it returns, so no GUI timer
+        # can run against a closed database.  atexit is the fallback.
         atexit.register(self._shutdown)
-        signal.signal(signal.SIGINT,  lambda *_: self._shutdown())
-        signal.signal(signal.SIGTERM, lambda *_: self._shutdown())
-        self.event_bus.subscribe(EventType.SHUTDOWN, lambda _e: self._shutdown())
+        signal.signal(signal.SIGINT,  lambda *_: self._quit_app())
+        signal.signal(signal.SIGTERM, lambda *_: self._quit_app())
+        self.event_bus.subscribe(EventType.SHUTDOWN, lambda _e: self._quit_app())
 
         # --- Build GUI ---
         self.main_window = MainWindow(
@@ -331,20 +335,31 @@ class BBSApplication:
             if self.rate_limiter and self.mode_policy:
                 self.rate_limiter.multiplier = self.mode_policy.rate_limit_multiplier
 
-    def restart(self, relaunch: bool = True):
-        """Graceful restart: shut down all subsystems, then re-launch.
+    @staticmethod
+    def _quit_app():
+        # exit(), not quit(): in Qt 6 quit() first asks each window to
+        # close, and the main window's "Stop the BBS and quit?" box would
+        # block a SIGTERM shutdown (the window's own Quit asked already)
+        app = QApplication.instance()
+        if app:
+            app.exit(0)
 
-        relaunch=False just quits: an installer the updater started brings
-        the new version up itself."""
+    def restart(self, relaunch: bool = True):
+        """Quit for an update; main() shuts down and, if *relaunch*, starts
+        the BBS again.  relaunch=False: an installer the updater started
+        brings the new version up itself."""
         log.info("Restart requested — shutting down for update")
-        self._shutdown()
-        if relaunch:
-            import subprocess as _sp
-            from core.paths import is_frozen
-            # A built app's sys.argv[0] is the program itself
-            args = [sys.executable] + (sys.argv[1:] if is_frozen() else sys.argv)
-            _sp.Popen(args)
-        QApplication.instance().quit()
+        self._relaunch = relaunch
+        self._quit_app()
+
+    def relaunch_if_requested(self):
+        if not self._relaunch:
+            return
+        import subprocess as _sp
+        from core.paths import is_frozen
+        # A built app's sys.argv[0] is the program itself
+        args = [sys.executable] + (sys.argv[1:] if is_frozen() else sys.argv)
+        _sp.Popen(args)
 
     def _shutdown(self):
         with self._shutdown_lock:
@@ -446,7 +461,10 @@ def main():
         app.setWindowIcon(QIcon(str(icon)))
 
     bbs_app = BBSApplication()
-    sys.exit(bbs_app.start(app))
+    rc = bbs_app.start(app)
+    bbs_app._shutdown()
+    bbs_app.relaunch_if_requested()
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
