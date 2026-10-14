@@ -56,6 +56,7 @@ class BBSApplication:
         self.cms_poller        = None
         self.cms_notifier      = None
         self.inbound_email     = None
+        self._inbound_applied  = None   # inbound email settings in use
         self.forward_manager   = None
         self.ntfy_notifier     = None
         self.pushover_notifier = None
@@ -71,13 +72,30 @@ class BBSApplication:
         self._shutdown_lock    = threading.Lock()
 
     def start(self, app: QApplication) -> int:
-        # --- Load configuration ---
+        """Bring the BBS up, in dependency order, then run the GUI."""
+        self._load_config()
+        self._open_store_and_security()   # everything below uses the store
+        self._build_bulletins_and_modems()
+        self._build_dispatcher()
+        self._build_internet_links()      # APRS-IS, Winlink, inbound email
+        self._build_notifiers()
+        self._install_shutdown_handlers()
+        self._build_gui()                 # shown before the services start
+        self._start_services()
+        self._follow_config_changes()
+        self._start_updater()             # needs the main window
+        log.info("All subsystems started")
+        return app.exec()
+
+    def _load_config(self):
+        """Settings and logging."""
         self.config = self.config_manager.load()
         setup_logging(self.config.logging)
         log.info("Aether BBS starting up")
         log.info(f"BBS callsign: {self.config.station.bbs_callsign}")
 
-        # --- Initialise subsystems ---
+    def _open_store_and_security(self):
+        """The message store, access control, mode policy and rate limits."""
         self.message_store = MessageStore(self.config, event_bus=self.event_bus)
         self.message_store.initialize()
 
@@ -96,6 +114,8 @@ class BBSApplication:
             multiplier=self.mode_policy.rate_limit_multiplier
         )
 
+    def _build_bulletins_and_modems(self):
+        """File and bulletin stores, forwarding, the modem instances."""
         # Bulletin board — always initialised (zero cost if unused)
         self.file_store = FileStore(
             self.config_manager, event_bus=self.event_bus,
@@ -104,11 +124,14 @@ class BBSApplication:
         self.file_store.initialize()
 
         self.bulletin_store = BulletinStore(self.message_store)
+        # given the ConfigManager, both follow Settings → Save
         self.bulletin_forwarder = BulletinForwarder(
-            self.config, self.message_store, self.bulletin_store, self.event_bus
+            self.config_manager, self.message_store, self.bulletin_store,
+            self.event_bus,
         )
         self.bulletin_server = BulletinForwardingServer(
-            self.config, self.message_store, self.bulletin_store, self.event_bus
+            self.config_manager, self.message_store, self.bulletin_store,
+            self.event_bus,
         )
 
         self.instance_manager = ModemInstanceManager(
@@ -117,6 +140,8 @@ class BBSApplication:
         # RF neighbours are called through the modem instances
         self.bulletin_forwarder.set_instance_manager(self.instance_manager)
 
+    def _build_dispatcher(self):
+        """Chat rooms and the session dispatcher."""
         # Multi-user chat room manager
         from bbs.converse import ConversationManager
         self.converse_manager = ConversationManager(self.event_bus)
@@ -132,10 +157,11 @@ class BBSApplication:
             converse_manager=self.converse_manager,
         )
 
-        if self.config.aprs.enabled:
-            self.aprs_gateway = APRSGateway(
-                self.config_manager, self.event_bus
-            )
+    def _build_internet_links(self):
+        """APRS-IS, Winlink (Pat) and inbound email."""
+        # always built (it connects only once started) so that turning
+        # APRS on in Settings needs no restart
+        self.aprs_gateway = APRSGateway(self.config_manager, self.event_bus)
 
         # Pat Winlink client — always create, enable/disable via config
         self.cms_poller = PatClient(
@@ -154,14 +180,6 @@ class BBSApplication:
 
         # Winlink forward manager — dynamically builds ;FW list
         self.forward_manager = WinlinkForwardManager(event_bus=self.event_bus)
-        wl = self.config.winlink
-        od = self.config.outbound_delivery
-        self.forward_manager.update_config(
-            gateway_callsign=wl.gateway_callsign,
-            manual_calls=wl.forward_calls,
-            mode=od.winlink_forward.mode,
-            max_calls=od.winlink_forward.max_calls,
-        )
         self.forward_manager.set_access_controller(self.access_controller)
         self.forward_manager.set_message_store(self.message_store)
         self.cms_poller.set_forward_manager(self.forward_manager)
@@ -172,23 +190,10 @@ class BBSApplication:
             event_bus=self.event_bus,
         )
         self.inbound_email.set_access_controller(self.access_controller)
-        ie_cfg = od.inbound_email
-        self.inbound_email.update_config(
-            enabled=ie_cfg.enabled,
-            protocol=ie_cfg.protocol,
-            host=ie_cfg.host,
-            port=ie_cfg.port,
-            use_ssl=ie_cfg.use_ssl,
-            username=ie_cfg.username,
-            password=ie_cfg.decrypt_password(self.config.security.machine_secret),
-            folder=ie_cfg.folder,
-            bbs_domain=ie_cfg.bbs_domain,
-            poll_interval=ie_cfg.poll_interval,
-            delete_after_fetch=ie_cfg.delete_after_fetch,
-            max_message_size=ie_cfg.max_message_size,
-            allowed_senders=ie_cfg.allowed_senders,
-        )
+        self._apply_internet_email(self.config)
 
+    def _build_notifiers(self):
+        """Push and SMS notification backends."""
         # Push notification backends — subscribe to PRIORITY_MESSAGE_RECEIVED
         self.ntfy_notifier = NtfyNotifier(self.config_manager, self.event_bus)
         self.pushover_notifier = PushoverNotifier(self.config_manager, self.event_bus)
@@ -200,7 +205,8 @@ class BBSApplication:
             self.config_manager, self.event_bus
         )
 
-        # --- Register shutdown handlers ---
+    def _install_shutdown_handlers(self):
+        """Ctrl+C, SIGTERM, SHUTDOWN and atexit."""
         # Ctrl+C, SIGTERM and the window's Quit end the Qt event loop;
         # main() shuts the subsystems down after it returns, so no GUI timer
         # can run against a closed database.  atexit is the fallback.
@@ -209,7 +215,8 @@ class BBSApplication:
         signal.signal(signal.SIGTERM, lambda *_: self._quit_app())
         self.event_bus.subscribe(EventType.SHUTDOWN, lambda _e: self._quit_app())
 
-        # --- Build GUI ---
+    def _build_gui(self):
+        """The main window."""
         self.main_window = MainWindow(
             self.config_manager,
             self.config,
@@ -229,19 +236,21 @@ class BBSApplication:
         )
         self.main_window.show()
 
-        # --- Start background services ---
+    def _start_services(self):
+        """Start the background services."""
         self.instance_manager.start_all()
         self.dispatcher.start()
         self.bulletin_forwarder.start()
         self.bulletin_server.start()
-        if self.aprs_gateway:
+        if self.aprs_gateway and self.config.aprs.enabled:
             self.aprs_gateway.start()
         if self.cms_poller:
             self.cms_poller.start()
-        if self.inbound_email and self.config.outbound_delivery.inbound_email.enabled:
-            self.inbound_email.start()
+        if self.inbound_email:
+            self.inbound_email.start()      # polls only while enabled
 
-        # --- Subscribe to config changes for live-updatable settings ---
+    def _follow_config_changes(self):
+        """Apply Settings → Save to the running services."""
         # vara_cmd_log can be toggled without a restart
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
@@ -257,13 +266,30 @@ class BBSApplication:
             EventType.CONFIG_CHANGED,
             self._on_config_changed_security,
         )
+        # Bulletin forwarding: the server listens again if its settings
+        # changed (neighbours are read live)
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            lambda e: (e.data or {}).get("config") and self.bulletin_server.apply_config(),
+        )
+        # APRS-IS: connect when turned on, disconnect when turned off
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            self._on_config_changed_aprs,
+        )
+        # Inbound email and the Winlink forward list
+        self.event_bus.subscribe(
+            EventType.CONFIG_CHANGED,
+            self._on_config_changed_email,
+        )
         # Restart instances whose rig_control or transport changed
         self.event_bus.subscribe(
             EventType.CONFIG_CHANGED,
             self._on_config_changed_instances,
         )
 
-        # --- Software updater ---
+    def _start_updater(self):
+        """The software updater."""
         from core.updater import Updater
         self.updater = Updater(
             repo_dir=install_dir(),
@@ -281,9 +307,6 @@ class BBSApplication:
         if self.config.updater.auto_check_interval_hours > 0:
             self.updater.start_periodic_check()
 
-        log.info("All subsystems started")
-        return app.exec()
-
     def _apply_winlink_config(self, cfg):
         """Push Winlink config into the Pat client."""
         if not self.cms_poller:
@@ -300,6 +323,50 @@ class BBSApplication:
             forward_calls=wl.forward_calls,
             cms_timeout=wl.cms_timeout,
         )
+
+    def _apply_internet_email(self, cfg):
+        """Push the inbound email and Winlink forward-list settings in
+        (at startup, and live on every Save)."""
+        wl, od = cfg.winlink, cfg.outbound_delivery
+        self.forward_manager.update_config(
+            gateway_callsign=wl.gateway_callsign,
+            manual_calls=wl.forward_calls,
+            mode=od.winlink_forward.mode,
+            max_calls=od.winlink_forward.max_calls,
+        )
+        ie = od.inbound_email
+        if ie == self._inbound_applied:
+            return          # unchanged: keep the poll timer as it is
+        self._inbound_applied = ie
+        self.inbound_email.update_config(
+            enabled=ie.enabled,
+            protocol=ie.protocol,
+            host=ie.host,
+            port=ie.port,
+            use_ssl=ie.use_ssl,
+            username=ie.username,
+            password=ie.decrypt_password(cfg.security.machine_secret),
+            folder=ie.folder,
+            bbs_domain=ie.bbs_domain,
+            poll_interval=ie.poll_interval,
+            delete_after_fetch=ie.delete_after_fetch,
+            max_message_size=ie.max_message_size,
+            allowed_senders=ie.allowed_senders,
+        )
+
+    def _on_config_changed_aprs(self, event):
+        cfg = (event.data or {}).get("config")
+        if not cfg or not self.aprs_gateway:
+            return
+        if cfg.aprs.enabled and not self.aprs_gateway.running:
+            self.aprs_gateway.start()
+        elif not cfg.aprs.enabled and self.aprs_gateway.running:
+            self.aprs_gateway.stop()
+
+    def _on_config_changed_email(self, event):
+        cfg = (event.data or {}).get("config")
+        if cfg and self.inbound_email:
+            self._apply_internet_email(cfg)
 
     def _on_config_changed_cms(self, event):
         """Update Pat client when config changes."""
@@ -392,7 +459,7 @@ def self_test() -> int:
         "ax25": "parser router",
         "bbs": "access bulletins converse dispatcher filestore interactive "
                "mode_policy rate_limiter store",
-        "core": "config crypto events logging_manager paths updater util version",
+        "core": "config crypto events logging_manager paths reconnect updater util version",
         "delivery": "config inbound",
         "gui": "aether_heard bbs_panel bulletins_tab chat_window delivery_tabs "
                "files_tab log_viewer mainwindow message_viewer messages_tab "

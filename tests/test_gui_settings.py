@@ -229,11 +229,12 @@ def test_inbound_email_password_is_encrypted_at_rest(qapp, tmp_path):
 
 
 def test_settings_that_need_a_restart_are_named():
+    """Only the log settings are still read once, at startup: instances,
+    PTT, bandwidth, APRS, forwarding, inbound email and the update
+    interval all apply on Save."""
     from core.config import AppConfig, ForwardingNeighbourConfig, InstanceConfig
     from gui.settings import restart_needed
     old = AppConfig(instances=[InstanceConfig(name="HF", enabled=False)])
-    assert restart_needed(old, old.model_copy(deep=True)) == []
-
     new = old.model_copy(deep=True)
     new.instances[0].enabled = True
     new.instances.append(InstanceConfig(name="VHF", cmd_port=8310, data_port=8311))
@@ -241,8 +242,75 @@ def test_settings_that_need_a_restart_are_named():
     new.bbs.forwarding_neighbours = [ForwardingNeighbourConfig(bbs_callsign="W2BBB")]
     new.updater.auto_check_interval_hours = 6
     new.outbound_delivery.inbound_email.host = "imap.example.org"
-    new.bbs.welcome_message = "hello"              # live: not listed
-    assert restart_needed(old, new) == [
-        "Inbound email", "Bulletin forwarding (neighbours and server)",
-        "APRS (turning it on)", "Enabling modem instance HF",
-        "New modem instance VHF", "Update check interval"]
+    assert restart_needed(old, new) == []
+    new.logging.level = "DEBUG"
+    assert restart_needed(old, new) == ["Logging (level, folder, file size)"]
+
+def test_an_unchanged_secret_is_saved_unchanged(qapp, tmp_path):
+    """Each Save re-encrypted every secret with a new salt, so it always
+    looked changed: an Aether instance with a control token was restarted
+    on every Save."""
+    cm, tab = _tab(tmp_path, '[[instances]]\nname = "HF"\n')
+    tab._inst_mode.setCurrentText("AETHER_HF")
+    tab._inst_ae_token.setText("tok123")
+    tab._ie_tab.widgets["password"].setText("imap-pw")
+    tab._wl_password.setText("wl-pw")
+    first = tab._build_config()
+    cm.save(first)
+
+    from core.events import EventBus
+    from gui.settings import SettingsTab
+    again = SettingsTab(cm, cm.load(), EventBus())
+    second = again._build_config()
+    assert second.instances[0].aether == first.instances[0].aether
+    assert second.outbound_delivery.inbound_email == first.outbound_delivery.inbound_email
+    assert second.winlink.gateway_password == first.winlink.gateway_password
+
+    again._ie_tab.widgets["password"].setText("new-pw")
+    third = again._build_config()
+    assert third.outbound_delivery.inbound_email.password != \
+        first.outbound_delivery.inbound_email.password
+    assert third.outbound_delivery.inbound_email.decrypt_password(
+        third.security.machine_secret) == "new-pw"
+
+
+RICH = Path(__file__).with_name("data") / "rich_settings.toml"
+
+
+def test_saving_an_unedited_form_keeps_every_setting(qapp, tmp_path):
+    """Save rebuilds every section from its widgets; with nothing edited
+    it must give back exactly the saved settings."""
+    cm, tab = _tab(tmp_path, RICH.read_text(encoding="utf-8"))
+    saved = cm.current()
+    built = tab._build_config()
+    for section in type(saved).model_fields:
+        assert getattr(built, section) == getattr(saved, section), section
+
+
+def _built_before_overlay(tab, monkeypatch):
+    """What Save builds from the widgets, before laying it over the saved
+    settings (overlay keeps a field the builder leaves out, so a builder
+    that dropped one would still look right)."""
+    import json
+    import core.config
+    captured = {}
+    real = core.config.overlay
+
+    def capture(base, built):
+        captured.setdefault("built", built)     # the outer call, not its recursion
+        return real(base, built)
+    monkeypatch.setattr(core.config, "overlay", capture)
+    tab._build_config()
+    data = captured["built"].model_dump(exclude_unset=True, mode="json")
+    data.get("security", {}).pop("machine_secret", None)    # random per run
+    return json.loads(json.dumps(data, sort_keys=True))
+
+
+def test_each_section_saves_the_same_fields(qapp, tmp_path, monkeypatch):
+    """Pins every field each section of Save sets, and its value, so
+    splitting the builder up cannot drop or change one."""
+    import json
+    snapshot = Path(__file__).with_name("data") / "rich_settings_built.json"
+    cm, tab = _tab(tmp_path, RICH.read_text(encoding="utf-8"))
+    built = _built_before_overlay(tab, monkeypatch)
+    assert built == json.loads(snapshot.read_text(encoding="utf-8"))

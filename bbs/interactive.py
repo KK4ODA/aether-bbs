@@ -972,12 +972,60 @@ class InteractiveSession:
 
         self._show_prompt()
 
+    # ── Shared pieces of the message commands ────────────────────────────
+
+    def _numbered(self, idx_str: str, rows: list, usage: str, noun: str):
+        """The row *idx_str* (1-based) picks from *rows*, as (index, row);
+        on a bad number say so (usage or "<noun> not found.") and return
+        None."""
+        try:
+            idx = int(idx_str) - 1
+        except ValueError:
+            self._send(f"Usage: {usage}\r\n")
+            self._show_prompt()
+            return None
+        if not 0 <= idx < len(rows):
+            self._send(f"{noun} not found.\r\n")
+            self._show_prompt()
+            return None
+        return idx, rows[idx]
+
+    def _page(self, lines: list) -> bool:
+        """Send *lines*, pausing after every pager-full (not after the
+        last line).  Q at the pause, a timeout or the link dropping stops
+        it: returns False then."""
+        for i, line in enumerate(lines):
+            self._send(line.rstrip("\r\n") + "\r\n")
+            if self._pager and (i + 1) % self._pager == 0 and i + 1 < len(lines):
+                self._send("-- More -- (Enter, or Q to quit)\r\n")
+                resp = self._get_line(timeout=self._config.bbs.session_timeout)
+                if resp is None or (isinstance(resp, str)
+                                    and resp.strip().upper() == "Q"):
+                    return False
+        return True
+
+    def _read_body(self) -> Optional[list[str]]:
+        """Read a message body up to a "." line (a timeout ends it too).
+        None if the link dropped first: nothing is to be saved then."""
+        self._send("Message (end with '.' on a line by itself):\r\n")
+        lines = []
+        while True:
+            line = self._get_line(timeout=self._config.bbs.session_timeout)
+            if line is None or line.strip() == ".":
+                break
+            lines.append(line)
+        return None if self._link_down else lines
+
     def _listed_messages(self) -> list[dict]:
         """The messages L shows, in its order; R n and K n index this."""
         return self._store.list_messages(
             area=self._list_area, limit=100,
             to_call=None if self._is_sysop else self.remote_call,
         )
+
+    def _listed_bulletins(self) -> list[dict]:
+        """The bulletins LB shows, in its order; RB n and KB n index this."""
+        return self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
 
     def _cmd_list(self, area: Optional[str] = None):
         self._list_area = area
@@ -988,39 +1036,28 @@ class InteractiveSession:
             header = f"{'#':<4} {'FROM':<10} {'TO':<10} {'DATE':<12} SUBJECT\r\n"
             self._send(header)
             self._send("-" * 60 + "\r\n")
+            rows = []
             for i, m in enumerate(msgs):
                 read_flag = " " if m["is_read"] else "*"
                 cms = m.get("cms_status", "")
                 wl_tag = "[WL] " if cms in ("RECEIVED", "QUEUED", "SENT") else ""
                 subj = f"{wl_tag}{m['subject']}"[:30]
-                line = (
+                rows.append(
                     f"{i+1:<4}{read_flag}"
                     f"{m['from_call']:<10} {m['to_call']:<10} "
                     f"{str(m['date'])[:10]:<12} "
-                    f"{subj}\r\n"
+                    f"{subj}"
                 )
-                self._send(line)
-                if (i + 1) % self._pager == 0:
-                    self._send("-- More -- (press Enter) \r\n")
-                    self._get_line(timeout=self._config.bbs.session_timeout)
+            self._page(rows)
 
         self._show_prompt()
 
     def _cmd_read(self, idx_str: str):
-        try:
-            idx = int(idx_str) - 1
-        except ValueError:
-            self._send("Usage: R <message number>\r\n")
-            self._show_prompt()
+        picked = self._numbered(idx_str, self._listed_messages(),
+                                "R <message number>", "Message")
+        if not picked:
             return
-
-        msgs = self._listed_messages()
-        if idx < 0 or idx >= len(msgs):
-            self._send("Message not found.\r\n")
-            self._show_prompt()
-            return
-
-        row = self._store.get_message(msgs[idx]["id"])
+        row = self._store.get_message(picked[1]["id"])
         if not row:
             self._send("Message not found.\r\n")
             self._show_prompt()
@@ -1056,14 +1093,8 @@ class InteractiveSession:
         self._send("Subject: ")
         subject = self._get_line(timeout=self._config.bbs.session_timeout) or ""
 
-        self._send("Message (end with '.' on a line by itself):\r\n")
-        lines = []
-        while True:
-            line = self._get_line(timeout=self._config.bbs.session_timeout)
-            if line is None or line.strip() == ".":
-                break
-            lines.append(line)
-        if self._link_down:
+        lines = self._read_body()
+        if lines is None:
             return   # link dropped before the end: don't post half a message
 
         body_text = "\r\n".join(lines)
@@ -1091,20 +1122,11 @@ class InteractiveSession:
         self._show_prompt()
 
     def _cmd_kill(self, idx_str: str):
-        try:
-            idx = int(idx_str) - 1
-        except ValueError:
-            self._send("Usage: K <message number>\r\n")
-            self._show_prompt()
+        picked = self._numbered(idx_str, self._listed_messages(),
+                                "K <message number>", "Message")
+        if not picked:
             return
-
-        msgs = self._listed_messages()
-        if idx < 0 or idx >= len(msgs):
-            self._send("Message not found.\r\n")
-            self._show_prompt()
-            return
-
-        msg = msgs[idx]
+        idx, msg = picked
         mine = self.remote_call in (msg["from_call"].upper(), msg["to_call"].upper())
         if not (mine or self._is_sysop):
             self._send("You can only delete your own messages.\r\n")
@@ -1156,7 +1178,7 @@ class InteractiveSession:
         if self._no_bulletins():
             return
         self._bulletin_area = area
-        bulletins = self._bbs.list_bulletins(area=area, limit=100)
+        bulletins = self._listed_bulletins()
         if not bulletins:
             msg = f"No bulletins" + (f" in area {area}." if area else ".") + "\r\n"
             self._send(msg)
@@ -1166,41 +1188,29 @@ class InteractiveSession:
             header = f"{'#':<4}  {'FROM':<10} {'GROUP':<10} {'DATE':<12} SUBJECT\r\n"
             self._send(header)
             self._send("-" * 64 + "\r\n")
+            rows = []
             for i, m in enumerate(bulletins):
                 urgent_flag = "!" if m.get("is_urgent") else " "
                 read_flag   = " " if m["is_read"] else "*"
-                line = (
+                rows.append(
                     f"{i+1:<4}{urgent_flag}{read_flag}"
                     f"{m['from_call']:<10} {m['to_call']:<10} "
                     f"{str(m['date'])[:10]:<12} "
-                    f"{m['subject'][:28]}\r\n"
+                    f"{m['subject'][:28]}"
                 )
-                self._send(line)
-                if (i + 1) % self._pager == 0:
-                    self._send("-- More -- (press Enter) \r\n")
-                    self._get_line(timeout=self._config.bbs.session_timeout)
             # Legend if any urgent bulletins exist
-            if any(m.get("is_urgent") for m in bulletins):
+            if self._page(rows) and any(m.get("is_urgent") for m in bulletins):
                 self._send("  (! = URGENT  * = unread)\r\n")
         self._show_prompt()
 
     def _cmd_read_bulletin(self, idx_str: str):
         if self._no_bulletins():
             return
-        try:
-            idx = int(idx_str) - 1
-        except ValueError:
-            self._send("Usage: RB <bulletin number>\r\n")
-            self._show_prompt()
+        picked = self._numbered(idx_str, self._listed_bulletins(),
+                                "RB <bulletin number>", "Bulletin")
+        if not picked:
             return
-
-        bulletins = self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
-        if idx < 0 or idx >= len(bulletins):
-            self._send("Bulletin not found.\r\n")
-            self._show_prompt()
-            return
-
-        row = self._store.get_message(bulletins[idx]["id"])
+        row = self._store.get_message(picked[1]["id"])
         if not row:
             self._send("Bulletin not found.\r\n")
             self._show_prompt()
@@ -1217,13 +1227,7 @@ class InteractiveSession:
         if isinstance(body, bytes):
             body = body.decode("utf-8", errors="replace")
 
-        # Paged output for long bulletins
-        lines = body.splitlines()
-        for i, line in enumerate(lines):
-            self._send(line + "\r\n")
-            if (i + 1) % self._pager == 0 and i + 1 < len(lines):
-                self._send("-- More -- (press Enter) \r\n")
-                self._get_line(timeout=self._config.bbs.session_timeout)
+        self._page(body.splitlines())       # long bulletins are paged
 
         self._store.mark_read(row["id"])
         self._show_prompt()
@@ -1275,14 +1279,8 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        self._send("Message (end with '.' on a line by itself):\r\n")
-        lines = []
-        while True:
-            line = self._get_line(timeout=self._config.bbs.session_timeout)
-            if line is None or line.strip() == ".":
-                break
-            lines.append(line)
-        if self._link_down:
+        lines = self._read_body()
+        if lines is None:
             return   # link dropped before the end: don't post half a message
 
         if not lines:
@@ -1326,20 +1324,11 @@ class InteractiveSession:
     def _cmd_kill_bulletin(self, idx_str: str):
         if self._no_bulletins():
             return
-        try:
-            idx = int(idx_str) - 1
-        except ValueError:
-            self._send("Usage: KB <bulletin number>\r\n")
-            self._show_prompt()
+        picked = self._numbered(idx_str, self._listed_bulletins(),
+                                "KB <bulletin number>", "Bulletin")
+        if not picked:
             return
-
-        bulletins = self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
-        if idx < 0 or idx >= len(bulletins):
-            self._send("Bulletin not found.\r\n")
-            self._show_prompt()
-            return
-
-        b = bulletins[idx]
+        idx, b = picked
         # Only the author or sysop can kill a bulletin
         if b["from_call"].upper() != self.remote_call and not self._is_sysop:
             self._send("You can only delete your own bulletins.\r\n")
@@ -1847,9 +1836,9 @@ class InteractiveSession:
                 lines.append(
                     f"{i+1:<4} {f['area']:<10} {f['filename']:<24} "
                     f"{self._fmt_size(f['size_bytes']):>8}  {f['dl_count']:>4}  "
-                    f"{f['description'][:24]}\r\n"
+                    f"{f['description'][:24]}"
                 )
-            self._paged_send(lines)
+            self._page(lines)
         self._show_prompt()
 
     def _cmd_file_get(self, args: str):
@@ -2129,14 +2118,3 @@ class InteractiveSession:
             return f"{n // 1024}K"
         else:
             return f"{n // (1024 * 1024)}M"
-
-    def _paged_send(self, lines: list):
-        """Send lines with paging (pauses every _pager lines)."""
-        for i, line in enumerate(lines):
-            self._send(line)
-            if self._pager and (i + 1) % self._pager == 0:
-                self._send("-- MORE -- (press ENTER or Q to quit)\r\n")
-                resp = self._get_line(timeout=self._config.bbs.session_timeout)
-                if resp is None or (isinstance(resp, str) and
-                                    resp.strip().upper() == "Q"):
-                    break

@@ -363,3 +363,23 @@ def test_settings_save_keeps_skip_and_channel(qapp, tmp_path):
     assert (upd.skipped_version, upd.channel) == ("1.3.0", "latest")
     tab._upd_unskip.setChecked(True)
     assert tab._build_config().updater.skipped_version == ""
+
+
+def test_a_new_check_interval_applies_without_a_restart(tmp_path):
+    """The periodic check kept its startup interval until a restart."""
+    from core.config import UpdaterConfig
+    from core.updater import Updater
+    up = Updater(tmp_path, None, UpdaterConfig(auto_check_interval_hours=24))
+    up.start_periodic_check()
+    first = up._thread
+    up.update_config(UpdaterConfig(auto_check_interval_hours=6))
+    assert up._thread is not first and up._thread.is_alive()
+    first.join(timeout=2)
+    assert not first.is_alive()                      # the old loop ended
+    old = up._thread
+    up.update_config(UpdaterConfig(auto_check_interval_hours=0))
+    old.join(timeout=2)
+    assert not old.is_alive() and up._thread is None  # 0 = no periodic check
+    up.update_config(UpdaterConfig(auto_check_interval_hours=12))
+    assert up._thread is not None and up._thread.is_alive()
+    up.stop()

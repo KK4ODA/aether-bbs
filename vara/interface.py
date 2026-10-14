@@ -19,6 +19,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from core.config import InstanceConfig
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from core.logging_manager import VARA_CMD_LOGGER_NAME
 
@@ -121,44 +122,36 @@ class VARAFMInterface:
         self._stop_event.clear()
         self._set_state(VARAFMState.CONNECTING)
 
-        delay = RETRY_BASE_DELAY
-        for attempt in range(1, CONNECT_RETRIES + 1):
-            if self._stop_event.is_set():
-                return
+        attempts = [0]
+
+        def attempt() -> bool:
+            attempts[0] += 1
             try:
-                self._cmd_sock = socket.create_connection(
-                    (self.cfg.host, self.cfg.cmd_port),
-                    timeout=CONNECT_TIMEOUT,
-                )
-                try:
-                    self._data_sock = socket.create_connection(
-                        (self.cfg.host, self.cfg.data_port),
-                        timeout=CONNECT_TIMEOUT,
-                    )
-                except OSError:
-                    self._cmd_sock.close()
-                    self._cmd_sock = None
-                    raise
-                self._cmd_sock.settimeout(SOCKET_POLL_TIMEOUT)
-                self._data_sock.settimeout(SOCKET_POLL_TIMEOUT)
-                log.info(
-                    f"[{self.cfg.name}] Connected to {modem_label(self.cfg)} "
-                    f"(cmd:{self.cfg.cmd_port} data:{self.cfg.data_port})"
-                )
-                self._set_state(VARAFMState.IDLE)
-                self._bus.emit(EventType.VARA_CONNECTED, source=self.cfg.name)
-                self._start_threads()
-                self._init_vara()
-                return
+                self._open_sockets()
+                return True
             except OSError as e:
                 log.warning(
-                    f"[{self.cfg.name}] TCP connect attempt {attempt}/{CONNECT_RETRIES} "
-                    f"failed: {e} — retry in {delay:.0f}s"
+                    f"[{self.cfg.name}] TCP connect attempt {attempts[0]}/"
+                    f"{CONNECT_RETRIES} failed: {e}"
                 )
-                if attempt < CONNECT_RETRIES:
-                    # Use Event.wait so disconnect() can interrupt the sleep
-                    self._stop_event.wait(timeout=delay)
-                    delay = min(delay * 2, MAX_RETRY_DELAY)
+                return False
+
+        # Event.wait, so disconnect() can interrupt a wait between tries
+        if retry(attempt, Backoff(RETRY_BASE_DELAY, MAX_RETRY_DELAY),
+                 should_stop=self._stop_event.is_set,
+                 wait=lambda delay: self._stop_event.wait(timeout=delay),
+                 max_attempts=CONNECT_RETRIES):
+            log.info(
+                f"[{self.cfg.name}] Connected to {modem_label(self.cfg)} "
+                f"(cmd:{self.cfg.cmd_port} data:{self.cfg.data_port})"
+            )
+            self._set_state(VARAFMState.IDLE)
+            self._bus.emit(EventType.VARA_CONNECTED, source=self.cfg.name)
+            self._start_threads()
+            self._init_vara()
+            return
+        if self._stop_event.is_set():
+            return
 
         log.error(f"[{self.cfg.name}] Could not connect to {modem_label(self.cfg)} "
                   f"after {CONNECT_RETRIES} attempts")
@@ -168,6 +161,20 @@ class VARAFMInterface:
                 f"on (Setup step 5, port {self.cfg.cmd_port})?"
             )
         self._set_state(VARAFMState.DISCONNECTED)
+
+    def _open_sockets(self):
+        """Open the command and data ports (raises OSError)."""
+        self._cmd_sock = socket.create_connection(
+            (self.cfg.host, self.cfg.cmd_port), timeout=CONNECT_TIMEOUT)
+        try:
+            self._data_sock = socket.create_connection(
+                (self.cfg.host, self.cfg.data_port), timeout=CONNECT_TIMEOUT)
+        except OSError:
+            self._cmd_sock.close()
+            self._cmd_sock = None
+            raise
+        self._cmd_sock.settimeout(SOCKET_POLL_TIMEOUT)
+        self._data_sock.settimeout(SOCKET_POLL_TIMEOUT)
 
     def disconnect(self):
         """Cleanly disconnect from VARA FM TCP.
@@ -244,7 +251,42 @@ class VARAFMInterface:
         """
         mode = modem_label(self.cfg)
         log.info(f"[{self.cfg.name}] Initialising {mode} modem...")
+        # Allow the modem to finish its own TCP-accept housekeeping first
+        if not self._send_init_sequence(settle=2.0):
+            return
 
+        # Validate init outcome
+        if self._init_wrong_count > 0:
+            log.error(
+                f"[{self.cfg.name}] {mode} init FAILED: "
+                f"{self._init_wrong_count} command(s) rejected with WRONG. "
+                f"Modem may NOT be listening for connections!"
+            )
+            # Still set LISTENING as best-effort — the operator can see the
+            # error in logs and the dashboard will show the error count.
+        else:
+            log.info(
+                f"[{self.cfg.name}] {mode} init OK: all commands acknowledged"
+            )
+
+        self._set_state(VARAFMState.LISTENING)
+        log.info(f"[{self.cfg.name}] {mode} initialised, listening")
+
+    def reinit(self):
+        """Send the init sequence again (before an outbound call, when a
+        new handler takes over).  Not during an RF session: VARA rejects
+        MYCALL and LISTEN ON with WRONG mid-connection."""
+        if self._state == VARAFMState.CONNECTED:
+            return
+        if (self._send_init_sequence(settle=1.0)
+                and self._init_wrong_count > 0):
+            log.error(f"[{self.cfg.name}] reinit FAILED: "
+                      f"{self._init_wrong_count} command(s) rejected")
+
+    def _send_init_sequence(self, settle: float) -> bool:
+        """MYCALL, COMPRESSION OFF, BW, VERSION (Aether HF), LISTEN ON,
+        about a second apart.  False if the link dropped on the way."""
+        mode = modem_label(self.cfg)
         # Reset init failure counter — _handle_event increments on WRONG
         self._init_wrong_count = 0
         self._in_init = True
@@ -260,25 +302,23 @@ class VARAFMInterface:
                 return True
             return False
 
-        # Allow VARA modem to finish its own TCP-accept housekeeping
-        time.sleep(2.0)
+        time.sleep(settle)
         if _aborted():
-            return
+            return False
 
         # 1. Set callsign
         self.send_cmd(f"MYCALL {self.cfg.cfg_bbs_callsign()}")
         time.sleep(1.0)
         if _aborted():
-            return
+            return False
 
         # 2. Disable VARA-level compression — the BBS protocol layer
-        #    handles its own framing and any compression (B2F/LZHUF).
-        #    VARA defaults to COMPRESSION TEXT (Huffman) which can corrupt
-        #    binary data or interfere with higher-level protocols.
+        #    handles its own framing.  VARA defaults to COMPRESSION TEXT
+        #    (Huffman), which can corrupt binary data.
         self.send_cmd("COMPRESSION OFF")
         time.sleep(1.0)
         if _aborted():
-            return
+            return False
 
         # 3. HF-specific: set bandwidth
         bw = init_bandwidth(self.cfg)
@@ -286,7 +326,7 @@ class VARAFMInterface:
             self.send_cmd(f"BW{bw}")
             time.sleep(1.0)
             if _aborted():
-                return
+                return False
             log.info(f"[{self.cfg.name}] {mode} bandwidth set to {bw} Hz")
         elif getattr(self.cfg, "is_aether", False):
             log.info(f"[{self.cfg.name}] Aether HF keeps its own bandwidth "
@@ -297,34 +337,17 @@ class VARAFMInterface:
             self.send_cmd("VERSION")
             time.sleep(0.5)
             if _aborted():
-                return
+                return False
 
         # 4. Enable inbound connections
         self.send_cmd("LISTEN ON")
         # Wait for the response before declaring success
         time.sleep(1.5)
         if _aborted():
-            return
+            return False
 
         self._in_init = False
-
-        # Validate init outcome
-        if self._init_wrong_count > 0:
-            log.error(
-                f"[{self.cfg.name}] {mode} init FAILED: "
-                f"{self._init_wrong_count} command(s) rejected with WRONG. "
-                f"Modem may NOT be listening for connections!"
-            )
-            # Still set LISTENING as best-effort — the operator can see the
-            # error in logs and the dashboard will show the error count.
-            # A future improvement would abort here.
-        else:
-            log.info(
-                f"[{self.cfg.name}] {mode} init OK: all commands acknowledged"
-            )
-
-        self._set_state(VARAFMState.LISTENING)
-        log.info(f"[{self.cfg.name}] {mode} initialised, listening")
+        return True
 
     def _start_threads(self):
         # Each thread keeps the socket it was started with and ends when that

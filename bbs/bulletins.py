@@ -406,7 +406,7 @@ class BulletinForwarder:
         bbs: "BulletinStore",
         event_bus: EventBus,
     ):
-        self._config  = config
+        self._config_src = config     # AppConfig, or ConfigManager (live)
         self._store   = store
         self._bbs     = bbs
         self._bus     = event_bus
@@ -414,18 +414,22 @@ class BulletinForwarder:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._im = None   # instance manager, for RF neighbours
+        # when each neighbour was last called, kept here: a Save replaces
+        # the neighbour objects, and must not make every neighbour due
+        self._last_called: dict[tuple, float] = {}
+
+    @property
+    def _config(self) -> AppConfig:
+        return _live(self._config_src)
 
     def set_instance_manager(self, im):
         """Give the forwarder the modem instances RF neighbours are called on."""
         self._im = im
 
     def start(self):
+        # runs with or without neighbours: it reads the list on every pass,
+        # so neighbours added in Settings are called without a restart
         if self._running:
-            return
-        # Only start if there are forwarding neighbours configured
-        neighbours = getattr(self._config.bbs, "forwarding_neighbours", [])
-        if not neighbours:
-            log.info("BulletinForwarder: no neighbours configured, forwarder idle")
             return
         self._running = True
         self._stop_event.clear()
@@ -479,8 +483,16 @@ class BulletinForwarder:
     def _is_due(self, neighbour: "ForwardingNeighbourConfig") -> bool:
         """Check if it's time to forward to this neighbour."""
         interval_secs = neighbour.interval_minutes * 60
-        last_fwd = getattr(neighbour, "_last_forwarded_at", 0)
+        last_fwd = self._last_called.get(_neighbour_key(neighbour), 0)
         return time.time() - last_fwd >= interval_secs
+
+    def _mark_called(self, neighbour) -> None:
+        now = time.time()
+        self._last_called[_neighbour_key(neighbour)] = now
+        try:
+            neighbour._last_forwarded_at = now
+        except (AttributeError, ValueError):
+            pass
 
     # ── Per-neighbour session ─────────────────────────────────────────────
 
@@ -531,7 +543,7 @@ class BulletinForwarder:
         HF or Aether HF).  An attempt counts against the interval whatever
         its outcome, so an unreachable neighbour is not called every minute.
         """
-        neighbour._last_forwarded_at = time.time()
+        self._mark_called(neighbour)
         call = neighbour.bbs_callsign
         mux = self._im.get_mux(neighbour.instance) if self._im else None
         if mux is None or not hasattr(mux, "begin_outbound"):
@@ -660,7 +672,7 @@ class BulletinForwarder:
                 self._receive_bulletin(send, recv, their_mid, neighbour)
 
         send(self._FWD_BYE)
-        neighbour._last_forwarded_at = time.time()
+        self._mark_called(neighbour)
 
         self._bus.emit(
             EventType.MESSAGE_RECEIVED,
@@ -806,6 +818,20 @@ class BulletinForwarder:
 
 # ── Server side: receive inbound forwarding connections ───────────────────────
 
+def _live(src) -> AppConfig:
+    """*src*'s settings as saved now: a ConfigManager gives the latest
+    (Settings → Save replaces the config object), an AppConfig itself."""
+    current = getattr(src, "current", None)
+    return (current() if callable(current) else None) or src
+
+
+def _neighbour_key(n) -> tuple:
+    via = getattr(n, "via", "TCP")
+    where = (getattr(n, "instance", "") if via == "RF"
+             else f"{getattr(n, 'host', '')}:{getattr(n, 'port', '')}")
+    return (n.bbs_callsign.strip().upper(), via, where)
+
+
 class BulletinForwardingServer:
     """
     Listens on a TCP port for inbound forwarding connections from neighbour BBSs.
@@ -819,30 +845,40 @@ class BulletinForwardingServer:
         bbs: BulletinStore,
         event_bus: EventBus,
     ):
-        self._config  = config
+        self._config_src = config     # AppConfig, or ConfigManager (live)
         self._store   = store
         self._bbs     = bbs
         self._bus     = event_bus
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._serving = None          # the forwarding settings listened with
+
+    @property
+    def _config(self) -> AppConfig:
+        return _live(self._config_src)
 
     def start(self):
         fwd_cfg = getattr(self._config.bbs, "forwarding", None)
+        self._serving = fwd_cfg
         if not fwd_cfg or not getattr(fwd_cfg, "server_enabled", False):
             log.info("BulletinForwardingServer: server disabled in config")
             return
         port = getattr(fwd_cfg, "server_port", 7300)
         bind = getattr(fwd_cfg, "server_bind", "0.0.0.0")
         try:
-            self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._server.bind((bind, port))
-            self._server.listen(5)
-            self._server.settimeout(1.0)
-            self._stop_event.clear()
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind((bind, port))
+            server.listen(5)
+            server.settimeout(1.0)
+            self._server = server
+            # each listener has its own socket and stop event, so a
+            # restarted server cannot leave its old accept loop running
+            self._stop_event = threading.Event()
             self._thread = threading.Thread(
                 target=self._accept_loop,
+                args=(server, self._stop_event),
                 name="FwdServer",
                 daemon=True,
             )
@@ -853,16 +889,28 @@ class BulletinForwardingServer:
 
     def stop(self):
         self._stop_event.set()
-        if self._server:
+        server, self._server = self._server, None
+        if server:
             try:
-                self._server.close()
+                server.close()
             except Exception:
                 pass
+        if self._thread and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
+        self._thread = None
 
-    def _accept_loop(self):
-        while not self._stop_event.is_set():
+    def apply_config(self):
+        """After a Save: listen again if the server settings changed."""
+        if self._config.bbs.forwarding == self._serving:
+            return
+        log.info("Forwarding server settings changed; restarting it")
+        self.stop()
+        self.start()
+
+    def _accept_loop(self, server: socket.socket, stop: threading.Event):
+        while not stop.is_set():
             try:
-                conn, addr = self._server.accept()
+                conn, addr = server.accept()
                 log.info(f"Inbound forwarding connection from {addr}")
                 threading.Thread(
                     target=self._handle_inbound,

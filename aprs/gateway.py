@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Optional
 
 from core.config import AppConfig, ConfigManager
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from core.version import get_version
 from vara.rigcontrol import _hour_in_range
@@ -56,6 +57,7 @@ class APRSGateway:
         self._connected = False
         self._verified  = False
         self._stop     = threading.Event()
+        self._stop.set()             # not running until start()
 
         self._rx_thread:     Optional[threading.Thread] = None
         self._beacon_thread: Optional[threading.Thread] = None
@@ -72,10 +74,17 @@ class APRSGateway:
         return self._cm.current()
 
 
+    @property
+    def running(self) -> bool:
+        return not self._stop.is_set()
+
     def start(self):
-        self._stop.clear()
+        # each run has its own stop event: after stop(), a loop still
+        # waiting or connecting cannot carry on beside the new one
+        self._stop = threading.Event()
         threading.Thread(
             target=self._connect_loop,
+            args=(self._stop,),
             name="APRS-IS-Connect",
             daemon=True,
         ).start()
@@ -99,20 +108,23 @@ class APRSGateway:
 
     # ── Connection management ─────────────────────────────────────────────
 
-    def _connect_loop(self):
-        delay = RECONNECT_BASE
-        while not self._stop.is_set():
+    def _connect_loop(self, stop: threading.Event):
+        backoff = Backoff(RECONNECT_BASE, RECONNECT_MAX)
+
+        def session() -> bool:
+            # one connection, until it drops; never "done", so it is
+            # always followed by a wait and a reconnect until stopped
             try:
-                self._connect()
-                delay = RECONNECT_BASE   # reset on success
+                self._connect(stop)
+                backoff.reset()          # a good session: start again at base
             except Exception as e:
                 log.error(f"APRS-IS connect error: {e}")
-            if not self._stop.is_set():
-                log.info(f"APRS-IS reconnect in {delay}s")
-                self._stop.wait(delay)
-                delay = min(delay * 2, RECONNECT_MAX)
+            return False
 
-    def _connect(self):
+        retry(session, backoff, should_stop=stop.is_set, wait=stop.wait,
+              on_retry=lambda _n, delay: log.info(f"APRS-IS reconnect in {delay}s"))
+
+    def _connect(self, stop: threading.Event):
         cfg = self._config.aprs
         log.info(f"Connecting to APRS-IS {cfg.is_server}:{cfg.is_port}")
 
@@ -163,7 +175,7 @@ class APRSGateway:
         # Start receiver
         self._rx_thread = threading.Thread(
             target=self._receive_loop,
-            args=(sock,),
+            args=(sock, stop),
             name="APRS-IS-RX",
             daemon=True,
         )
@@ -172,7 +184,7 @@ class APRSGateway:
         # Start beacon
         self._beacon_thread = threading.Thread(
             target=self._beacon_loop,
-            args=(gen,),
+            args=(gen, stop),
             name="APRS-IS-Beacon",
             daemon=True,
         )
@@ -185,9 +197,9 @@ class APRSGateway:
         self._close()
         self._bus.emit(EventType.APRS_IS_DISCONNECTED, source="APRS-IS")
 
-    def _receive_loop(self, sock: socket.socket):
+    def _receive_loop(self, sock: socket.socket, stop: threading.Event):
         buf = ""
-        while not self._stop.is_set():
+        while not stop.is_set():
             try:
                 chunk = sock.recv(1024).decode("ascii", errors="replace")
                 if not chunk:
@@ -207,40 +219,40 @@ class APRSGateway:
             except OSError:
                 break
 
-    def _beacon_loop(self, gen: int):
+    def _beacon_loop(self, gen: int, stop: threading.Event):
         interval = self._config.station.beacon_interval * 60
         if interval <= 0:
             return
 
         # Flush stale aprs.fi status immediately on connect (before first beacon).
-        self._stop.wait(5)
-        if not self._stop.is_set() and self._connected:
+        stop.wait(5)
+        if not stop.is_set() and self._connected:
             self._send_status_packet()
 
         # Wait up to 30 s for the first auto-beacon, but yield immediately if a
         # manual beacon was already sent during that window.
-        self._wait_until_due(30)
+        self._wait_until_due(30, stop)
 
-        while not self._stop.is_set() and self._connected and self._conn_gen == gen:
+        while not stop.is_set() and self._connected and self._conn_gen == gen:
             self._send_beacon()
             # Sleep for the configured interval, but wake early if a manual
             # beacon fires and resets _last_beacon_time.
-            self._wait_until_due(interval)
+            self._wait_until_due(interval, stop)
 
-    def _wait_until_due(self, desired_interval: float):
+    def _wait_until_due(self, desired_interval: float, stop: threading.Event):
         """
         Sleep until at least `desired_interval` seconds have elapsed since
         the last beacon (manual or auto).  Polls every second so that:
           • _stop can interrupt it cleanly
           • a manual beacon that stamps _last_beacon_time is noticed within 1 s
         """
-        while not self._stop.is_set():
+        while not stop.is_set():
             elapsed = time.monotonic() - self._last_beacon_time
             remaining = desired_interval - elapsed
             if remaining <= 0:
                 return
             # Sleep in 1-second slices so we stay responsive
-            self._stop.wait(min(1.0, remaining))
+            stop.wait(min(1.0, remaining))
 
     # ── Beacons ───────────────────────────────────────────────────────────
 

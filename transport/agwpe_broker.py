@@ -12,13 +12,15 @@ import time
 from typing import Optional
 
 from core.config import InstanceConfig, AppConfig
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from transport.agwpe import AGWPEClient, AGWPEFrame
 from transport.protocol import TransportState, TransportType, SessionHandler
 
 log = logging.getLogger(__name__)
 
-RECONNECT_DELAY = 5.0
+RECONNECT_DELAY = 5.0    # first wait; after a lost link it doubles …
+RECONNECT_MAX   = 60.0   # … up to once a minute, until it is back
 
 
 class AGWPEBroker:
@@ -54,6 +56,7 @@ class AGWPEBroker:
             host=self._sm.host,
             port=self._sm.port,
             on_frame=self._on_frame,
+            on_disconnect=self._on_link_lost,
         )
 
         self._state = TransportState.DISCONNECTED
@@ -61,6 +64,7 @@ class AGWPEBroker:
         self._active_handler: Optional[SessionHandler] = None
         self._handler_lock   = threading.Lock()
         self._retired         = False
+        self._reconnect_thread: Optional[threading.Thread] = None
 
         # Track active AX.25 connection
         self._remote_call: Optional[str] = None
@@ -70,25 +74,62 @@ class AGWPEBroker:
     def connect(self) -> None:
         """Connect to the AGWPE server. Blocking with retry."""
         self._state = TransportState.CONNECTING
-        while not self._retired:
-            if self._client.connect():
-                self._state = TransportState.IDLE
-                # Register our callsign
-                self._client.register_callsign(self._my_call_full)
-                self._bus.emit(
-                    EventType.VARA_CONNECTED,
-                    source=self.cfg.name,
-                    data={"transport": "SOUNDMODEM", "protocol": "AGWPE"},
-                )
-                return
-            if self._retired:
-                break
-            log.warning(
-                f"[{self.cfg.name}] AGWPE connect failed, "
-                f"retrying in {RECONNECT_DELAY}s"
-            )
-            time.sleep(RECONNECT_DELAY)
+        if not retry(self._attach, Backoff(RECONNECT_DELAY, RECONNECT_DELAY),
+                     should_stop=lambda: self._retired,
+                     on_retry=self._log_retry):
+            self._state = TransportState.DISCONNECTED
+
+    def _attach(self) -> bool:
+        """One connection attempt: link up, callsign registered."""
+        if not self._client.connect():
+            return False
+        if self._retired:              # stopped while connecting
+            self._client.disconnect()
+            return False
+        self._state = TransportState.IDLE
+        self._client.register_callsign(self._my_call_full)
+        self._bus.emit(
+            EventType.VARA_CONNECTED,
+            source=self.cfg.name,
+            data={"transport": "SOUNDMODEM", "protocol": "AGWPE"},
+        )
+        return True
+
+    def _log_retry(self, tries: int, delay: float) -> None:
+        log.warning(f"[{self.cfg.name}] AGWPE connect failed, "
+                    f"retrying in {delay:g}s")
+
+    def _on_link_lost(self) -> None:
+        """The AGWPE server dropped the link (Soundmodem closed or
+        crashed): end any session on it, show the link down, reconnect."""
+        old_call, self._remote_call = self._remote_call, None
         self._state = TransportState.DISCONNECTED
+        if old_call:
+            log.info(f"[{self.cfg.name}] AX.25 session with {old_call} "
+                     f"lost with the AGWPE link")
+            self._bus.emit(EventType.SESSION_DISCONNECTED, source=self.cfg.name,
+                           data={"remote_call": old_call})
+            with self._handler_lock:
+                if self._active_handler:
+                    self._active_handler.on_cmd_event("DISCONNECTED")
+        self._bus.emit(EventType.VARA_DISCONNECTED, source=self.cfg.name)
+        if self._retired:
+            return
+        if self._reconnect_thread and self._reconnect_thread.is_alive():
+            return
+        self._reconnect_thread = threading.Thread(
+            target=self._reconnect_loop, daemon=True,
+            name=f"AGWPE-Reconnect-{self.cfg.name}")
+        self._reconnect_thread.start()
+
+    def _reconnect_loop(self) -> None:
+        log.warning(f"[{self.cfg.name}] AGWPE link lost; reconnecting "
+                    f"in {RECONNECT_DELAY:g}s")
+        self._state = TransportState.CONNECTING
+        if not retry(self._attach, Backoff(RECONNECT_DELAY, RECONNECT_MAX),
+                     should_stop=lambda: self._retired, wait_first=True,
+                     on_retry=self._log_retry):
+            self._state = TransportState.DISCONNECTED
 
     def disconnect(self) -> None:
         """Disconnect and retire this broker."""
@@ -124,7 +165,8 @@ class AGWPEBroker:
             self._session_lock.release()
         except RuntimeError:
             pass
-        self._state = TransportState.IDLE
+        if self._state == TransportState.CONNECTED:   # not if the link dropped
+            self._state = TransportState.IDLE
         self._remote_call = None
 
     # ── Data transfer ─────────────────────────────────────────────────

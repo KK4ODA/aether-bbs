@@ -205,7 +205,8 @@ class BBSStatusPanel(QWidget):
         aprs_layout.addLayout(aprs_row2)
         layout.addWidget(aprs_group)
         self._aprs_group = aprs_group
-        self._aprs_group.setVisible(self._gateway is not None)
+        self._aprs_group.setVisible(
+            self._gateway is not None and self._config.aprs.enabled)
 
         # ── Send Private Message card ─────────────────────────────────
         # This card uses a distinct background and scoped styling to
@@ -522,6 +523,7 @@ class BBSStatusPanel(QWidget):
         self._bus.subscribe(EventType.APRS_IS_CONNECTED,    self._on_aprs_connected)
         self._bus.subscribe(EventType.APRS_IS_DISCONNECTED, self._on_aprs_disconnected)
         self._bus.subscribe(EventType.APRS_BEACON_SENT,     self._on_beacon_sent)
+        self._bus.subscribe(EventType.CONFIG_CHANGED,       self._on_config_changed)
         self._bus.subscribe(EventType.CHAT_REQUEST,         self._on_chat_started)
         self._bus.subscribe(EventType.CHAT_ENDED,           self._on_chat_finished)
         self._bus.subscribe(EventType.UPLOAD_DENIED,        self._on_upload_denied)
@@ -592,6 +594,21 @@ class BBSStatusPanel(QWidget):
         from PyQt6.QtCore import QMetaObject, Q_ARG
         QMetaObject.invokeMethod(self, "_show_upload_denied",
             Qt.ConnectionType.QueuedConnection, Q_ARG(str, msg))
+
+    def _on_config_changed(self, event):
+        cfg = (event.data or {}).get("config")
+        if cfg is None:
+            return
+        self._config = cfg
+        from PyQt6.QtCore import QMetaObject
+        QMetaObject.invokeMethod(self, "_show_aprs_group",
+            Qt.ConnectionType.QueuedConnection)
+
+    @pyqtSlot()
+    def _show_aprs_group(self):
+        """APRS turned on or off in Settings."""
+        self._aprs_group.setVisible(
+            self._gateway is not None and self._config.aprs.enabled)
 
     def _on_aprs_connected(self, event):
         from PyQt6.QtCore import QMetaObject

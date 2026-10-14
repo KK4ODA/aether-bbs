@@ -5,15 +5,15 @@ TNCBroker — owns the single VARAFMInterface for one VARA FM, VARA HF or
 Aether HF instance and arbitrates session access for the BBS dispatcher.
 """
 
-import time
 import logging
 import threading
 from typing import Optional, Protocol
 
 from core.config import InstanceConfig, AppConfig
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from vara.interface import (VARAFMInterfaceWithCall, VARAFMState,
-                            init_bandwidth, modem_label)
+                            modem_label)
 from vara.ptt import PTTController, create_ptt_driver
 from vara.rigcontrol import RigController
 
@@ -318,38 +318,9 @@ class TNCBroker:
     # ── Internal ──────────────────────────────────────────────────────────
 
     def _reinit_vara(self):
-        """Re-send initialisation commands when a new handler takes over.
-
-        Neither MYCALL nor LISTEN ON should be sent while an RF session is
-        already active — VARA FM rejects both with WRONG mid-connection.
-        This guard also avoids the spurious WRONG log entries that made
-        the command log harder to read.
-
-        Uses the same command sequence as _init_vara() in the interface
-        (MYCALL → COMPRESSION OFF → BW → LISTEN ON) with ≥ 1 s pauses
-        between commands, matching the timing used by Pat, BPQ32, and JNOS.
-        """
-        if self._interface.state == VARAFMState.CONNECTED:
-            return
-        self._interface._in_init = True
-        self._interface._init_wrong_count = 0
-        time.sleep(1.0)
-        self._interface.send_cmd(f"MYCALL {self._app_cfg.station.bbs_callsign}")
-        time.sleep(1.0)
-        # Ensure raw data mode (no VARA-level Huffman compression)
-        self._interface.send_cmd("COMPRESSION OFF")
-        time.sleep(1.0)
-        # Restore HF-specific settings that may not persist between sessions
-        bw = init_bandwidth(self.cfg)
-        if bw:
-            self._interface.send_cmd(f"BW{bw}")
-            time.sleep(1.0)
-        self._interface.send_cmd("LISTEN ON")
-        time.sleep(1.0)
-        self._interface._in_init = False
-        if self._interface._init_wrong_count > 0:
-            log.error(f"[{self.cfg.name}] reinit FAILED: "
-                      f"{self._interface._init_wrong_count} command(s) rejected")
+        """Re-send the modem init sequence when a new handler takes over
+        (the interface's own: one sequence for connect and re-init)."""
+        self._interface.reinit()
 
     def _start_data_relay(self):
         """Relay incoming data bytes to the active handler."""
@@ -435,28 +406,28 @@ class TNCBroker:
             self._ptt.release("modem link lost")
         if self._retired:
             return
+        thread = getattr(self, "_reconnect_thread", None)
+        if thread is not None and thread.is_alive():
+            return               # already reconnecting: one loop only
         log.warning(f"[{self.cfg.name}] {modem_label(self.cfg)} TCP dropped; "
                     f"attempting reconnect in 5s")
-        threading.Thread(
+        self._reconnect_thread = threading.Thread(
             target=self._reconnect_loop,
             name=f"Reconnect-{self.cfg.name}",
             daemon=True,
-        ).start()
+        )
+        self._reconnect_thread.start()
 
     def _reconnect_loop(self):
         """Keep trying until the modem is back or this broker is retired
         (a modem restart can take longer than one connect()'s retries)."""
-        delay = 5.0
-        while True:
-            time.sleep(delay)
-            if self._retired:
-                return
+        def attempt() -> bool:
             log.info(f"[{self.cfg.name}] Attempting {modem_label(self.cfg)} reconnect")
             self._interface.connect()
-            if self._retired:
-                return
-            if self._interface.state != VARAFMState.DISCONNECTED:
-                self._start_data_relay()
-                return
-            delay = min(delay * 2, 60.0)
+            return (not self._retired
+                    and self._interface.state != VARAFMState.DISCONNECTED)
+
+        if retry(attempt, Backoff(5.0, 60.0), should_stop=lambda: self._retired,
+                 wait_first=True):
+            self._start_data_relay()
 

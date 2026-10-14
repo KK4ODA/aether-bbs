@@ -21,7 +21,9 @@ log = logging.getLogger(__name__)
 # AGWPE header: 4 bytes port + 4 bytes reserved + 1 byte data_kind + 1 byte reserved +
 #               1 byte PID + 1 byte reserved + 10 bytes callFrom + 10 bytes callTo +
 #               4 bytes dataLen + 4 bytes user = 36 bytes total
-HEADER_FMT = "<I I c x B x 10s 10s I i"
+# (Direwolf's struct: portx, 3 reserved, datakind, reserved, pid,
+#  reserved, call_from[10], call_to[10], data_len, user — 36 bytes.)
+HEADER_FMT = "<B 3x c x B x 10s 10s I i"
 HEADER_SIZE = 36
 
 
@@ -52,7 +54,6 @@ def encode_frame(frame: AGWPEFrame) -> bytes:
     header = struct.pack(
         HEADER_FMT,
         frame.port,
-        0,  # reserved
         frame.data_kind.encode("ascii"),
         frame.pid,
         _encode_call(frame.call_from),
@@ -65,7 +66,7 @@ def encode_frame(frame: AGWPEFrame) -> bytes:
 
 def decode_frame(header: bytes, data: bytes) -> AGWPEFrame:
     """Decode an AGWPE frame from header + data bytes."""
-    (port, _res1, kind_b, pid,
+    (port, kind_b, pid,
      call_from_b, call_to_b, data_len, user) = struct.unpack(HEADER_FMT, header)
     return AGWPEFrame(
         port=port,
@@ -91,10 +92,14 @@ class AGWPEClient:
         host: str = "127.0.0.1",
         port: int = 8000,
         on_frame: Optional[Callable[[AGWPEFrame], None]] = None,
+        on_disconnect: Optional[Callable[[], None]] = None,
     ):
         self._host = host
         self._port = port
         self._on_frame = on_frame
+        # called (on the reader thread) when the server drops the link,
+        # not when disconnect() closes it
+        self._on_disconnect = on_disconnect
         self._sock: Optional[socket.socket] = None
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
@@ -106,15 +111,21 @@ class AGWPEClient:
 
     def connect(self, timeout: float = 10.0) -> bool:
         """Connect to the AGWPE server. Returns True on success."""
+        self._close()            # never two links (and readers) at once
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(timeout)
             s.connect((self._host, self._port))
             s.settimeout(None)
+            # notice a server that vanished without closing the connection
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             self._sock = s
             self._running = True
+            # the reader owns its socket: after a reconnect an old reader
+            # must not read from (or report the loss of) the new link
             self._reader_thread = threading.Thread(
                 target=self._reader_loop,
+                args=(s,),
                 daemon=True,
                 name="AGWPE-Reader",
             )
@@ -128,27 +139,31 @@ class AGWPEClient:
 
     def disconnect(self):
         """Close the AGWPE connection."""
-        self._running = False
-        if self._sock:
-            try:
-                self._sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                self._sock.close()
-            except OSError:
-                pass
-            self._sock = None
+        self._close()
         log.info("AGWPE disconnected")
+
+    def _close(self):
+        self._running = False
+        sock, self._sock = self._sock, None
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def send_frame(self, frame: AGWPEFrame) -> bool:
         """Send a frame to the AGWPE server. Thread-safe."""
-        if not self._sock:
+        sock = self._sock
+        if not sock:
             return False
         raw = encode_frame(frame)
         with self._write_lock:
             try:
-                self._sock.sendall(raw)
+                sock.sendall(raw)
                 return True
             except OSError as e:
                 log.error(f"AGWPE send error: {e}")
@@ -204,18 +219,18 @@ class AGWPEClient:
 
     # ── Background reader ─────────────────────────────────────────────
 
-    def _reader_loop(self):
+    def _reader_loop(self, sock: socket.socket):
         """Read and dispatch AGWPE frames from the server."""
-        while self._running:
+        while self._running and self._sock is sock:
             try:
-                header = self._recv_exact(HEADER_SIZE)
+                header = self._recv_exact(sock, HEADER_SIZE)
                 if header is None:
                     break
                 # Extract data length from header
                 data_len = struct.unpack_from("<I", header, 28)[0]
                 data = b""
                 if data_len > 0:
-                    data = self._recv_exact(data_len)
+                    data = self._recv_exact(sock, data_len)
                     if data is None:
                         break
                 frame = decode_frame(header, data)
@@ -229,16 +244,22 @@ class AGWPEClient:
                     log.error(f"AGWPE reader error: {e}")
                 break
 
-        if self._running:
+        if self._running and self._sock is sock:
             log.warning("AGWPE connection lost")
-            self._running = False
+            self._close()
+            if self._on_disconnect:
+                try:
+                    self._on_disconnect()
+                except Exception as e:
+                    log.error(f"AGWPE disconnect handler error: {e}")
 
-    def _recv_exact(self, n: int) -> Optional[bytes]:
-        """Read exactly *n* bytes from the socket."""
+    @staticmethod
+    def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
+        """Read exactly *n* bytes from *sock*."""
         buf = bytearray()
         while len(buf) < n:
             try:
-                chunk = self._sock.recv(n - len(buf))
+                chunk = sock.recv(n - len(buf))
                 if not chunk:
                     return None
                 buf.extend(chunk)

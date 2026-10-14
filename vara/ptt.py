@@ -316,8 +316,13 @@ class HamlibDriver(PTTDriver):
                                 f"returned: {resp.strip()}")
             except OSError as e:
                 log.error(f"Hamlib PTT error: {e}")
-                # Try to reconnect for the next call
-                self._try_reconnect()
+                # reconnect and send it again: a lost "T 0" would leave the
+                # radio keyed (the PTT watchdog is off once PTT went off)
+                if self._try_reconnect():
+                    try:
+                        self._send_cmd(cmd)
+                    except OSError as e2:
+                        log.error(f"Hamlib PTT '{cmd}' failed again: {e2}")
 
     def _send_cmd(self, cmd: str) -> str:
         if not self._sock:
@@ -332,7 +337,7 @@ class HamlibDriver(PTTDriver):
             data += chunk
         return data.decode("ascii", errors="replace")
 
-    def _try_reconnect(self):
+    def _try_reconnect(self) -> bool:
         """Attempt to re-establish rigctld connection."""
         if self._sock:
             try:
@@ -343,8 +348,10 @@ class HamlibDriver(PTTDriver):
         try:
             self._connect()
             log.info("Hamlib PTT reconnected to rigctld")
+            return True
         except Exception as e:
             log.warning(f"Hamlib PTT reconnect failed: {e}")
+            return False
 
     def description(self) -> str:
         return f"Hamlib rigctld at {self._host}:{self._port}"
