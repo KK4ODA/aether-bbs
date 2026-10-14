@@ -124,3 +124,24 @@ def test_check_for_updates_reports_back(qapp, tmp_path, monkeypatch):
         time.sleep(0.02)
     assert tab._upd_check_btn.isEnabled()
     assert "Up to date" in tab._upd_status.text()
+
+
+def test_one_bad_value_does_not_wipe_the_config(tmp_path):
+    """A value that fails validation resets its own section only; the
+    callsign and the machine secret (which every stored password depends
+    on) survive."""
+    from core.config import ConfigManager
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text(
+        '[station]\nbbs_callsign = "KK4ODA-1"\n'
+        '[security]\nmachine_secret = "s3cret-abc"\n'
+        '[bbs]\nsession_timeout = -5\nwelcome_message = "hi"\n'
+        '[aprs]\nbeacon_symbol = "\\\\k"\n')
+    cfg = ConfigManager(path).load()
+    assert cfg.station.bbs_callsign == "KK4ODA-1"
+    assert cfg.security.machine_secret == "s3cret-abc"
+    assert cfg.aprs.beacon_symbol == "\\k"
+    assert cfg.bbs.session_timeout > 0                 # the bad section reset
+    assert list(tmp_path.glob("aether_bbs.toml.bad.*"))  # original kept
+    again = ConfigManager(path).load()                  # and the saved file loads
+    assert again.security.machine_secret == "s3cret-abc"

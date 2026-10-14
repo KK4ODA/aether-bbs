@@ -581,6 +581,7 @@ class ConfigManager:
             self._config = cfg
             return cfg
 
+        raw = None
         try:
             raw = tomllib.loads(self._path.read_text(encoding="utf-8"))
             raw = self._strip_defunct_fields(raw)
@@ -594,12 +595,38 @@ class ConfigManager:
             self._config = cfg
             return cfg
         except Exception as e:
-            log.error(f"Config load failed: {e} — backing up and using defaults")
+            log.error(f"Config load failed: {e} — backing up and salvaging what is valid")
             self._backup_bad_config()
-            cfg = AppConfig()
+            cfg = self._salvage(raw)
             self.save(cfg)
             self._config = cfg
             return cfg
+
+    def _salvage(self, raw: Optional[dict]) -> AppConfig:
+        """Rebuild a config from a file that failed validation: keep each
+        top-level section that is valid on its own, reset only the others,
+        and always keep the machine secret (without it every stored password
+        and encrypted secret is lost)."""
+        if not isinstance(raw, dict):           # not even valid TOML
+            cfg, _ = self._migrate(AppConfig())
+            return cfg
+        kept: dict = {}
+        reset: list[str] = []
+        for key, value in raw.items():
+            try:
+                AppConfig.model_validate({**kept, key: value})
+                kept[key] = value
+            except Exception:
+                reset.append(key)
+        secret = (raw.get("security") or {}).get("machine_secret") \
+            if isinstance(raw.get("security"), dict) else None
+        if "security" in reset and isinstance(secret, str) and secret:
+            kept["security"] = {"machine_secret": secret}
+        cfg, _ = self._migrate(AppConfig.model_validate(kept))
+        log.error(
+            "Settings reset to defaults for: %s (the rest was kept; the "
+            "original file was saved alongside as .bad)", ", ".join(reset) or "nothing")
+        return cfg
 
     @staticmethod
     def _strip_defunct_fields(raw: dict) -> dict:
