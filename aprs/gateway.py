@@ -24,6 +24,7 @@ from vara.rigcontrol import _hour_in_range
 log = logging.getLogger(__name__)
 
 RECONNECT_BASE  = 30    # seconds
+RX_TIMEOUT      = 60    # a quiet link for this long gets a #keepalive
 RECONNECT_MAX   = 300   # seconds
 
 
@@ -58,6 +59,8 @@ class APRSGateway:
 
         self._rx_thread:     Optional[threading.Thread] = None
         self._beacon_thread: Optional[threading.Thread] = None
+        # Bumped per connection; a connection's threads stop once it changes
+        self._conn_gen = 0
 
         # Monotonic timestamp of the last beacon sent by ANY path (auto or manual).
         # The beacon loop reads this so a manual beacon resets the auto countdown.
@@ -113,10 +116,11 @@ class APRSGateway:
         cfg = self._config.aprs
         log.info(f"Connecting to APRS-IS {cfg.is_server}:{cfg.is_port}")
 
-        self._sock = socket.create_connection(
-            (cfg.is_server, cfg.is_port), timeout=30
-        )
-        self._sock.settimeout(60)
+        sock = socket.create_connection((cfg.is_server, cfg.is_port), timeout=30)
+        sock.settimeout(RX_TIMEOUT)
+        self._sock = sock
+        self._conn_gen += 1
+        gen = self._conn_gen
 
         # Login — read passcode fresh from live config
         call = self._config.station.bbs_callsign
@@ -150,6 +154,7 @@ class APRSGateway:
                     )
                 break
 
+        sock.settimeout(RX_TIMEOUT)   # _recv_line shortened it for the banner
         self._connected = True
         self._verified  = verified
         self._bus.emit(EventType.APRS_IS_CONNECTED, source="APRS-IS",
@@ -158,6 +163,7 @@ class APRSGateway:
         # Start receiver
         self._rx_thread = threading.Thread(
             target=self._receive_loop,
+            args=(sock,),
             name="APRS-IS-RX",
             daemon=True,
         )
@@ -166,21 +172,24 @@ class APRSGateway:
         # Start beacon
         self._beacon_thread = threading.Thread(
             target=self._beacon_loop,
+            args=(gen,),
             name="APRS-IS-Beacon",
             daemon=True,
         )
         self._beacon_thread.start()
 
-        # Wait for receiver to exit (connection dropped)
-        self._rx_thread.join(timeout=60)
-        self._connected = False
+        # Wait for the receiver to exit: it runs as long as the link is up
+        # (a quiet link gets keepalives), so this returns only on a real drop
+        # or stop().  Close this connection before the next one is made.
+        self._rx_thread.join()
+        self._close()
         self._bus.emit(EventType.APRS_IS_DISCONNECTED, source="APRS-IS")
 
-    def _receive_loop(self):
+    def _receive_loop(self, sock: socket.socket):
         buf = ""
         while not self._stop.is_set():
             try:
-                chunk = self._sock.recv(1024).decode("ascii", errors="replace")
+                chunk = sock.recv(1024).decode("ascii", errors="replace")
                 if not chunk:
                     break
                 buf += chunk
@@ -198,7 +207,7 @@ class APRSGateway:
             except OSError:
                 break
 
-    def _beacon_loop(self):
+    def _beacon_loop(self, gen: int):
         interval = self._config.station.beacon_interval * 60
         if interval <= 0:
             return
@@ -212,7 +221,7 @@ class APRSGateway:
         # manual beacon was already sent during that window.
         self._wait_until_due(30)
 
-        while not self._stop.is_set() and self._connected:
+        while not self._stop.is_set() and self._connected and self._conn_gen == gen:
             self._send_beacon()
             # Sleep for the configured interval, but wake early if a manual
             # beacon fires and resets _last_beacon_time.
