@@ -181,8 +181,7 @@ WINDOWS_BBS = """
 import sys, time
 from pathlib import Path
 sys.path.insert(0, sys.argv[4])
-import importlib
-u = importlib.import_module(sys.argv[5])
+import core.updater as u
 setup, folder, app = (Path(a) for a in sys.argv[1:4])
 sys.executable = str(app)
 u.Updater._run_windows_setup(None, setup, folder)
@@ -192,38 +191,34 @@ time.sleep(3)                       # the BBS shutting down
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="runs the real update script")
-@pytest.mark.parametrize("module", ["core.updater", "tests._old.old_updater"])
-def test_windows_update_script_runs_setup_after_the_bbs_quits(tmp_path, module):
+def test_windows_update_script_runs_setup_after_the_bbs_quits(tmp_path):
     """The script the updater leaves behind, run for real: it waits for the
-    BBS to quit, runs the setup, then starts the BBS again."""
+    BBS to quit, runs the setup, then starts the BBS again.  (The 1.3.6
+    script, run like this, never got as far as the setup.)"""
     import subprocess
     import time
     folder = tmp_path / "update folder"
     folder.mkdir()
     setup = folder / "fake-setup.cmd"
-    setup.write_text('@if exist "%~dp0bbs-quit.txt" (echo after) else (echo before)'
-                     ' > "%~dp0setup-ran.txt"\r\n@echo %* >> "%~dp0setup-ran.txt"\r\n')
+    setup.write_text('@if exist "%~dp0bbs-quit.txt" (echo after>"%~dp0setup-ran.txt")'
+                     ' else (echo before>"%~dp0setup-ran.txt")\r\n'
+                     '@echo %*>>"%~dp0setup-ran.txt"\r\n')
     app = folder / "fake-bbs.cmd"
     app.write_text('@echo started > "%~dp0bbs-started.txt"\r\n@exit\r\n')
     subprocess.run([sys.executable, "-c", WINDOWS_BBS, str(setup), str(folder),
-                    str(app), str(ROOT), module], check=True, timeout=30)
+                    str(app), str(ROOT)], check=True, timeout=30)
 
-    # the old script ran the setup without "call", so a .cmd stand-in never
-    # returns to it: there, only the setup can be checked
-    started = folder / ("bbs-started.txt" if module == "core.updater" else "setup-ran.txt")
+    started = folder / "bbs-started.txt"
     deadline = time.time() + 30
     while time.time() < deadline and not started.exists():
         time.sleep(0.2)
     log_path = folder / "update.log"
     log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    print("FILES", sorted(p.name for p in folder.iterdir()))
-    print("SCRIPT", repr((folder / "run-update.cmd").read_bytes()))
     assert started.exists(), log
     ran = (folder / "setup-ran.txt").read_text()
     assert ran.startswith("after"), ran          # only once the BBS had quit
     assert "/SILENT" in ran and "setup.log" in ran
-    if module == "core.updater":
-        assert "Setup finished with code 0" in log and "Started" in log
+    assert "Setup finished with code 0" in log and "Started" in log
 
 
 def test_macos_opens_the_disk_image(tmp_path, monkeypatch):
