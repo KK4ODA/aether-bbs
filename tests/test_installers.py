@@ -184,7 +184,7 @@ sys.path.insert(0, sys.argv[4])
 import core.updater as u
 setup, folder, app = (Path(a) for a in sys.argv[1:4])
 sys.executable = str(app)
-u.Updater._run_windows_setup(None, setup, folder)
+u.Updater.__new__(u.Updater)._run_windows_setup(setup, folder)
 time.sleep(3)                       # the BBS shutting down
 (folder / "bbs-quit.txt").write_text("quit")
 """
