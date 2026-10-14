@@ -23,6 +23,7 @@ personal messages in their mailbox.
 import email
 import email.utils
 import email.header
+import hashlib
 import imaplib
 import poplib
 import logging
@@ -82,10 +83,6 @@ def extract_callsign_from_email(address: str, domain: str = "") -> Optional[str]
 
     return None
 
-
-def build_email_address(callsign: str, domain: str) -> str:
-    """Build an email address from a callsign and BBS domain."""
-    return f"{callsign.lower()}@{domain.lower()}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -232,10 +229,6 @@ class InboundEmailPoller:
     def is_enabled(self) -> bool:
         return self._enabled
 
-    @property
-    def last_stats(self) -> Optional[InboundEmailStats]:
-        return self._last_stats
-
     # ── Internal ─────────────────────────────────────────────────────────────
 
     def _schedule_next(self):
@@ -339,7 +332,9 @@ class InboundEmailPoller:
 
             for msg_id in msg_ids:
                 try:
-                    typ, msg_data = conn.fetch(msg_id, "(RFC822)")
+                    # PEEK: the server marks the mail read only once it is
+                    # handled below, so one that fails is fetched again
+                    typ, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
                     if typ != "OK":
                         stats.errors += 1
                         continue
@@ -351,6 +346,7 @@ class InboundEmailPoller:
                             f"skipping"
                         )
                         stats.rejected += 1
+                        conn.store(msg_id, "+FLAGS", "\\Seen")   # handled: refused
                         continue
 
                     delivered = self._process_email(raw_email)
@@ -360,10 +356,10 @@ class InboundEmailPoller:
                         if self._delete_after_fetch:
                             conn.store(msg_id, "+FLAGS", "\\Deleted")
                         else:
-                            # Mark as seen (already done by FETCH, but explicit)
                             conn.store(msg_id, "+FLAGS", "\\Seen")
                     else:
                         stats.rejected += 1
+                        conn.store(msg_id, "+FLAGS", "\\Seen")   # handled: refused
 
                 except Exception as e:
                     log.error(f"Failed to process email {msg_id}: {e}")
@@ -517,11 +513,23 @@ class InboundEmailPoller:
         if from_display and from_email:
             from_identity = f"{from_display} <{from_email}>"
 
-        # Store for each target callsign
+        # Store for each target callsign.  The MID comes from the email's
+        # Message-ID (or its bytes), so the same email fetched again — a
+        # POP3 mailbox kept on the server, an IMAP retry — is not stored
+        # twice.
+        email_key = (msg.get("Message-ID") or "").strip() or \
+            hashlib.sha1(raw).hexdigest()
         stored = False
         for callsign in target_callsigns:
+            mid = "E" + hashlib.sha1(
+                f"{email_key}|{callsign}".encode("utf-8", "replace")
+            ).hexdigest()[:11].upper()
+            if self._store.has_message(mid):
+                stored = True          # already delivered on an earlier poll
+                continue
             try:
                 mid = self._store.save_message(
+                    mid=mid,
                     from_call=from_identity[:40],  # truncate for BBS display
                     to_call=callsign,
                     subject=subject[:80],
@@ -868,14 +876,3 @@ class WinlinkForwardManager:
 
         return []
 
-    def get_forward_count(self) -> int:
-        """Return the current count of callsigns in the forward list."""
-        return len(self.build_forward_list())
-
-    def get_mode_description(self) -> str:
-        """Return a human-readable description of the current mode."""
-        return {
-            ForwardListMode.MANUAL: "Manual — only explicitly configured callsigns",
-            ForwardListMode.AUTO_APPROVED: "Auto (Approved+) — all approved, trusted, and sysop users",
-            ForwardListMode.AUTO_ALL: "Auto (All) — all registered users except blocked",
-        }.get(self._mode, "Unknown")

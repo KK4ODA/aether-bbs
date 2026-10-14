@@ -42,13 +42,7 @@ class EventSignalBridge(QObject):
     session_disconnected = pyqtSignal(str)         # instance
     vara_process_up      = pyqtSignal(str)
     vara_process_down    = pyqtSignal(str)
-    vara_connected       = pyqtSignal(str)
     vara_disconnected    = pyqtSignal(str)
-    channel_busy         = pyqtSignal(str, bool)   # instance, busy
-    ptt_change           = pyqtSignal(str, bool)
-    buffer_update        = pyqtSignal(str, int)
-    frame_received       = pyqtSignal(dict)
-    aprs_beacon          = pyqtSignal(str)
     aprs_is_connected    = pyqtSignal()
     aprs_is_disconnected = pyqtSignal()
     message_received          = pyqtSignal(str)   # mid
@@ -346,23 +340,8 @@ class MainWindow(QMainWindow):
             lambda e: _emit(b.vara_process_up, e.source))
         bus.subscribe(EventType.VARA_PROCESS_DOWN,
             lambda e: _emit(b.vara_process_down, e.source))
-        bus.subscribe(EventType.VARA_CONNECTED,
-            lambda e: _emit(b.vara_connected, e.source))
         bus.subscribe(EventType.VARA_DISCONNECTED,
             lambda e: _emit(b.vara_disconnected, e.source))
-        bus.subscribe(EventType.CHANNEL_BUSY,
-            lambda e: _emit(b.channel_busy,
-                            e.source, (e.data or {}).get("busy", False)))
-        bus.subscribe(EventType.PTT_CHANGE,
-            lambda e: _emit(b.ptt_change,
-                            e.source, (e.data or {}).get("ptt", False)))
-        bus.subscribe(EventType.BUFFER_UPDATE,
-            lambda e: _emit(b.buffer_update,
-                            e.source, (e.data or {}).get("bytes", 0)))
-        bus.subscribe(EventType.FRAME_RECEIVED,
-            lambda e: _emit(b.frame_received, e.data or {}))
-        bus.subscribe(EventType.APRS_BEACON_SENT,
-            lambda e: _emit(b.aprs_beacon, (e.data or {}).get("beacon", "")))
         bus.subscribe(EventType.APRS_IS_CONNECTED,
             lambda e: _emit(b.aprs_is_connected))
         bus.subscribe(EventType.APRS_IS_DISCONNECTED,

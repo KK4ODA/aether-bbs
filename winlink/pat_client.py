@@ -368,21 +368,12 @@ class PatClient:
         return self._enabled
 
     @property
-    def is_polling(self) -> bool:
-        return self._lock.locked()
-
-    @property
     def last_result(self) -> Optional[PollResult]:
         return self._last_result
 
     @property
     def outbound_queue(self) -> Optional['OutboundQueue']:
         return self._queue
-
-    @property
-    def pat_running(self) -> bool:
-        """True if Pat HTTP API is reachable."""
-        return self._probe_pat_http()
 
     def set_forward_manager(self, mgr) -> None:
         """Inject the WinlinkForwardManager for dynamic ;FW list building."""
@@ -443,18 +434,6 @@ class PatClient:
             return True
         except (ConnectionRefusedError, OSError, socket.timeout, ValueError):
             return False
-
-    def _restart_pat(self):
-        """Stop and restart the managed Pat process."""
-        if self._managed and self._pat_proc and self._pat_proc.poll() is None:
-            log.info("Restarting Pat (PID %d)", self._pat_proc.pid)
-            self._pat_proc.terminate()
-            try:
-                self._pat_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._pat_proc.kill()
-            self._pat_proc = None
-        self._launch_pat()
 
     # ── Pat config management ────────────────────────────────────────────
 
@@ -949,34 +928,3 @@ class PatClient:
         except Exception:
             return ""
 
-    def get_nearby_gateways(self, limit: int = 20) -> list[dict]:
-        """
-        Query Pat for nearby VARA FM RMS gateways.
-        Returns list of dicts with callsign and distance info.
-        """
-        if not self._pat_exe_path or not os.path.isfile(self._pat_exe_path):
-            return []
-        try:
-            result = subprocess.run(
-                [self._pat_exe_path, "rmslist", "-s", "-m", "varafm"],
-                capture_output=True, timeout=30,
-                cwd=os.path.dirname(self._pat_exe_path),
-            )
-            if result.returncode != 0:
-                return []
-
-            gateways = []
-            for line in result.stdout.decode().splitlines():
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    gateways.append({
-                        "callsign": parts[0],
-                        "info": " ".join(parts[1:]),
-                    })
-                if len(gateways) >= limit:
-                    break
-            return gateways
-
-        except Exception as e:
-            log.warning("Failed to list Pat gateways: %s", e)
-            return []

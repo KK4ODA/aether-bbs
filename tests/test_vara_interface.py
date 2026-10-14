@@ -219,3 +219,21 @@ def test_reconnect_keeps_trying_until_the_modem_is_back(monkeypatch):
     broker._reconnect_loop()
     assert Iface.attempts == 4 and relays == [1]
     assert sleeps == [5.0, 10.0, 20.0, 40.0]
+
+
+def test_start_on_an_attached_soundmodem_instance_does_nothing(monkeypatch):
+    """Pressing Start on a running Soundmodem instance used to open a second
+    AGWPE connection (and launch a second Soundmodem) beside the first."""
+    import vara.instance_manager as im_mod
+    from vara.instance_manager import InstanceStatus, ModemInstanceManager
+    launched = []
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: launched.append(a))
+    cfg = InstanceConfig(name="Pkt", transport="SOUNDMODEM")
+    cfg.soundmodem.auto_launch = True
+    cfg.soundmodem.exe_path = __file__          # an existing file
+    status = InstanceStatus(cfg)
+    attached = type("Broker", (), {"state": type("S", (), {"name": "IDLE"})()})()
+    status.mux = attached
+    mgr = ModemInstanceManager.__new__(ModemInstanceManager)
+    mgr._start_soundmodem_instance(status)
+    assert status.mux is attached and launched == []

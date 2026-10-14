@@ -195,7 +195,6 @@ class InstanceCard(QGroupBox):
             "CRASHED":    STATE_COLORS["crashed"],
             "STOPPED":    STATE_COLORS["stopped"],
             "STARTING":   STATE_COLORS["connecting"],
-            "SIMULATOR":  STATE_COLORS["simulator"],
         }.get(state_name, STATE_COLORS["stopped"])
         self._proc_ind.setStyleSheet(
             f"background-color:{color};border-radius:7px;"
@@ -378,12 +377,6 @@ class InstanceCard(QGroupBox):
         """Next on_scan_freq call will update — just reset colour."""
         self._freq_lbl.setStyleSheet("font-weight:bold;font-size:10pt;color:#58a6ff;")
 
-    @pyqtSlot()
-    def on_scan_stopped(self):
-        """Restore the static config frequency label when scanning stops."""
-        self._freq_lbl.setText(self._static_freq)
-        self._freq_lbl.setStyleSheet("font-weight:bold;font-size:10pt;")
-
 
 
 class ModemStatusPanel(QScrollArea):
@@ -500,8 +493,6 @@ class ModemStatusPanel(QScrollArea):
         self._bus.subscribe(EventType.VARA_DISCONNECTED,    self._on_vara_tcp_down)
         self._bus.subscribe(EventType.VARA_PROCESS_UP,      self._on_proc_up)
         self._bus.subscribe(EventType.VARA_PROCESS_DOWN,    self._on_proc_down)
-        self._bus.subscribe(EventType.SIMULATOR_ACTIVE,     self._on_sim_active)
-        self._bus.subscribe(EventType.SIMULATOR_INACTIVE,   self._on_sim_inactive)
         self._bus.subscribe(EventType.CONFIG_CHANGED,       self._on_config_changed)
         self._bus.subscribe(EventType.SCAN_FREQ_CHANGED,    self._on_scan_freq)
         self._bus.subscribe(EventType.LINK_QUALITY,         self._on_link_quality)
@@ -556,17 +547,6 @@ class ModemStatusPanel(QScrollArea):
             [i.name for i in self._config.instances if i.enabled and i.is_aether])
         self._aether_heard.setVisible(self._has_aether_monitor())
         log.info(f"Modem panel rebuilt — {len(self._cards)} instance card(s)")
-
-    # Event callbacks run in background threads → use invokeMethod pattern
-    def _card_slot(self, instance, method, *args):
-        card = self._cards.get(instance)
-        if card:
-            from PyQt6.QtCore import QMetaObject, Qt
-            QMetaObject.invokeMethod(
-                card, method,
-                Qt.ConnectionType.QueuedConnection,
-                *args,
-            )
 
     def _on_connected(self, event):
         card = self._cards.get(event.source)
@@ -667,26 +647,10 @@ class ModemStatusPanel(QScrollArea):
 
     def _on_proc_down(self, event):
         card = self._cards.get(event.source)
-        if card and not getattr(card, "_sim_active", False):
+        if card:
             from PyQt6.QtCore import QMetaObject, Q_ARG
             QMetaObject.invokeMethod(card, "on_process_state",
                 Qt.ConnectionType.QueuedConnection, Q_ARG(str, "CRASHED"))
-
-    def _on_sim_active(self, event):
-        card = self._cards.get(event.source)
-        if card:
-            card._sim_active = True
-            from PyQt6.QtCore import QMetaObject, Q_ARG
-            QMetaObject.invokeMethod(card, "on_process_state",
-                Qt.ConnectionType.QueuedConnection, Q_ARG(str, "SIMULATOR"))
-
-    def _on_sim_inactive(self, event):
-        card = self._cards.get(event.source)
-        if card:
-            card._sim_active = False
-            from PyQt6.QtCore import QMetaObject, Q_ARG
-            QMetaObject.invokeMethod(card, "on_process_state",
-                Qt.ConnectionType.QueuedConnection, Q_ARG(str, "STOPPED"))
 
     # ── Aether HF stations heard ──────────────────────────────────────
 

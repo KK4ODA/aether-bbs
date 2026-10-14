@@ -46,7 +46,6 @@ BACKOFF_JITTER      = 0.25     # ±25%
 
 # Queue processing
 DEFAULT_POLL_SEC    = 30       # how often the engine checks the queue
-MAX_CONCURRENT      = 1        # max simultaneous delivery attempts
 
 # Message expiration
 DEFAULT_EXPIRY_DAYS = 7
@@ -115,17 +114,6 @@ class DeliveryEngine:
         self._expiry_days = DEFAULT_EXPIRY_DAYS
 
     # ── Properties ───────────────────────────────────────────────────────────
-
-    @property
-    def winlink_backend(self) -> WinlinkBackend:
-        return self._winlink
-
-    @property
-    def smtp_backend(self) -> SMTPBackend:
-        return self._smtp
-
-    def get_backend(self, backend_type: DeliveryBackendType) -> OutboundDeliveryBackend:
-        return self._backends[backend_type]
 
     # ── Configuration ────────────────────────────────────────────────────────
 
@@ -356,11 +344,6 @@ class DeliveryEngine:
             log.info(f"Winlink unavailable — routing email to SMTP fallback")
             return DeliveryBackendType.SMTP
 
-        return None
-
-        # Callsign recipients go to Winlink
-        if self._winlink.is_enabled():
-            return DeliveryBackendType.WINLINK
         return None
 
     def _select_provider(self, backend: OutboundDeliveryBackend,

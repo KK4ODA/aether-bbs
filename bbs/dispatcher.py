@@ -27,7 +27,6 @@ from ax25.router import PacketRouter
 log = logging.getLogger(__name__)
 
 LINE_TIMEOUT   = 10.0   # seconds to wait for first line
-BUFFER_LIMIT   = 2048   # bytes; throttle TX above this
 _MAX_DISPLAY   = 200    # max chars shown in DATA_TX/DATA_RX events
 
 # Sentinel pushed into _line_queue on RF disconnect (distinct from None timeout)
@@ -102,13 +101,6 @@ class InstanceSessionHandler:
             if val is _DISCONNECTED:
                 return None   # caller treats None as "session over"
             return val
-        except queue.Empty:
-            return None
-
-    def recv_line_raw(self, timeout: float = LINE_TIMEOUT):
-        """Like recv_line but returns _DISCONNECTED sentinel rather than None on disconnect."""
-        try:
-            return self._line_queue.get(timeout=timeout)
         except queue.Empty:
             return None
 
@@ -212,12 +204,6 @@ class SessionDispatcher:
     @property
     def _live_config(self) -> AppConfig:
         return (self._cm.current() or self._config) if self._cm else self._config
-
-    @property
-    def is_busy(self) -> bool:
-        """True if the BBS cannot accept another session."""
-        with self._active_count_lock:
-            return self._active_session_count >= self._max_sessions
 
     @property
     def active_session_count(self) -> int:

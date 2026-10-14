@@ -538,3 +538,10 @@ class TestBulletinConfig:
         enabled = [a for a in cfg.bbs.bulletin_areas if a.enabled]
         assert len(enabled) == 1
         assert enabled[0].name == "ALL"
+
+
+def test_sms_text_cannot_inject_modem_commands():
+    from notifications.sms import sms_safe_text
+    # Ctrl+Z would end the SMS and the rest would be run as an AT command
+    assert sms_safe_text("NEW MSG\x1aAT+CMGD=1,4\x1b") == "NEW MSGAT+CMGD=1,4"
+    assert sms_safe_text("line1\r\nline2\t!") == "line1\nline2!"

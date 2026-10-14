@@ -645,15 +645,6 @@ class PTTController:
         self._started = False
         log.info(f"[{self._name}] PTT controller stopped")
 
-    def get_omnirig_client(self):
-        """Return the OmniRigClient if using OmniRig, else None.
-
-        Used to share the single OmniRig COM connection with the rig controller.
-        """
-        if isinstance(self._driver, OmniRigDriver):
-            return self._driver.client
-        return None
-
     def _on_ptt(self, event) -> None:
         """Event bus callback for PTT_CHANGE events."""
         # Only handle events for our instance

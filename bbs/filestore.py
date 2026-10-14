@@ -430,9 +430,6 @@ class FileStore:
             )
             return cur.fetchone()
 
-    def file_exists(self, area: str, filename: str) -> bool:
-        return self.get_file_meta(area, filename) is not None
-
     # ── Upload permission check ─────────────────────────────────────
 
     @staticmethod
@@ -537,25 +534,6 @@ class FileStore:
             })
 
     # ── Upload (PUT) ──────────────────────────────────────────────────────
-
-    def begin_upload(self, area: str, filename: str, uploader: str,
-                     description: str, size_bytes: int) -> Optional[Path]:
-        """
-        Validate and prepare for an upload.
-        Returns the destination Path if OK, or None if rejected.
-        """
-        area = area.upper()
-        if not self.area_exists(area):
-            return None
-        if size_bytes > MAX_FILE_BYTES:
-            return None
-        # Sanitise filename — alphanumeric, dots, dashes, underscores only
-        safe = "".join(c for c in filename if c.isalnum() or c in "._-")
-        if not safe or len(safe) > 64:
-            return None
-        area_dir = self._root / area
-        area_dir.mkdir(parents=True, exist_ok=True)
-        return area_dir / safe
 
     def commit_upload(
         self,

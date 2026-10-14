@@ -83,13 +83,6 @@ class EventType(Enum):
     CMS_MESSAGE_SENT    = auto()   # individual message accepted by CMS
     CMS_MESSAGE_RECEIVED= auto()   # individual message downloaded from CMS
 
-    # Outbound delivery events
-    DELIVERY_ATTEMPTED       = auto()   # delivery attempt started
-    DELIVERY_SUCCEEDED       = auto()   # message delivered via any backend
-    DELIVERY_FAILED          = auto()   # delivery attempt failed
-    DELIVERY_FAILOVER        = auto()   # backend failover occurred
-    DELIVERY_EXPIRED         = auto()   # message expired after all retries
-    DELIVERY_BACKEND_HEALTH  = auto()   # backend health state changed
 
     # Inbound delivery events
     INBOUND_EMAIL_POLL_STARTED   = auto()   # email poll cycle beginning
@@ -106,9 +99,6 @@ class EventType(Enum):
     UPDATE_STARTED       = auto()
     UPDATE_COMPLETE      = auto()   # data: UpdateApplyResult
     UPDATE_FAILED        = auto()   # data: error message string
-    LOG_ENTRY           = auto()   # for GUI log viewer
-    SIMULATOR_ACTIVE    = auto()   # simulator started for an instance
-    SIMULATOR_INACTIVE  = auto()   # simulator stopped for an instance
 
     # Rig control / scanning events
     SCAN_FREQ_CHANGED   = auto()   # radio tuned to a new scan channel

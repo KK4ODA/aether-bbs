@@ -20,9 +20,7 @@ from bbs.bulletins import BulletinStore, is_bulletin_address
 
 log = logging.getLogger(__name__)
 
-BBS_SOFTWARE_VERSION = "1.0.0"
 B2F_VERSION          = "B2F-2.4.1.0"
-MAX_LINE_WAIT        = 120   # seconds
 
 
 class B2FSession:

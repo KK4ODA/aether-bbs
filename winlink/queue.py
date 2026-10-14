@@ -85,15 +85,6 @@ class OutboundQueue:
         self._store.set_cms_status(mid, MessageStatus.QUEUED)
         log.info(f"Queued MID={mid} for CMS delivery")
 
-    def requeue_failed(self, mid: str):
-        """Re-queue a FAILED message for another CMS delivery attempt."""
-        msg = self._store.get_message(mid)
-        if not msg:
-            return
-        if msg.get("cms_status") == MessageStatus.FAILED:
-            self._store.set_cms_status(mid, MessageStatus.QUEUED)
-            log.info(f"Re-queued FAILED MID={mid} for CMS retry")
-
     # ── CMS Poll Interface ───────────────────────────────────────────────
 
     def get_cms_outbound(self, limit: int = 25) -> list[dict]:
@@ -137,16 +128,6 @@ class OutboundQueue:
         """Mark a message as successfully delivered to CMS."""
         self._store.mark_sent(mid)  # sets is_sent=1 and cms_status=SENT
 
-    def mark_rejected(self, mid: str):
-        """Mark a message as rejected by CMS (already had it)."""
-        self._store.set_cms_status(mid, MessageStatus.REJECTED)
-        # Also mark as "sent" since CMS confirmed it has the message
-        with self._store._lock:
-            self._store._conn.execute(
-                "UPDATE messages SET is_sent=1 WHERE id=?", (mid,),
-            )
-            self._store._conn.commit()
-
     def mark_failed(self, mid: str, reason: str = ""):
         """
         Record a failed delivery attempt.  If max attempts exceeded,
@@ -170,10 +151,6 @@ class OutboundQueue:
                 f"failed: {reason}"
             )
 
-    def mark_received(self, mid: str):
-        """Mark an inbound message as received from CMS."""
-        self._store.set_cms_status(mid, MessageStatus.RECEIVED)
-
     # ── Rollback ─────────────────────────────────────────────────────────
 
     def rollback_sending(self):
@@ -192,22 +169,7 @@ class OutboundQueue:
 
     # ── Convenience ──────────────────────────────────────────────────────
 
-    def get_local_pending(self, callsign: str) -> list[dict]:
-        """Get messages waiting for local RF pickup by a specific callsign."""
-        return self._store.get_messages_for(callsign)
-
     def cms_queue_count(self) -> int:
         """Count of messages queued for CMS delivery."""
         return len(self._store.get_cms_queued(limit=200))
 
-    def get_status_summary(self) -> dict[str, int]:
-        """Return counts of messages in each CMS status."""
-        summary = {}
-        for status in [MessageStatus.QUEUED, MessageStatus.SENDING,
-                        MessageStatus.SENT, MessageStatus.REJECTED,
-                        MessageStatus.FAILED, MessageStatus.RECEIVED,
-                        MessageStatus.LOCAL]:
-            msgs = self._store.get_messages_by_cms_status(status, limit=9999)
-            if msgs:
-                summary[status] = len(msgs)
-        return summary

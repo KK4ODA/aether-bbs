@@ -20,6 +20,18 @@ from core.events import EventBus, EventType
 
 log = logging.getLogger(__name__)
 
+# One SMS at a time: concurrent sends would interleave AT commands on the port
+_PORT_LOCK = threading.Lock()
+
+
+def sms_safe_text(text: str) -> str:
+    """Message text with control characters removed.  The modem ends the
+    SMS at Ctrl+Z (0x1A) and cancels it at ESC, so a subject or callsign
+    carrying either (from an RF user or an inbound email) would cut the
+    message short and have the rest read as AT commands.  Newlines stay."""
+    return "".join(c for c in text if c == "\n" or ord(c) >= 0x20)
+
+
 
 class SMSNotifier:
     """
@@ -172,7 +184,7 @@ class SMSNotifier:
                 return
 
             try:
-                with serial.Serial(port, baud, timeout=5) as ser:
+                with _PORT_LOCK, serial.Serial(port, baud, timeout=5) as ser:
                     # Set text mode
                     ser.write(b"AT+CMGF=1\r")
                     time.sleep(0.5)
@@ -197,7 +209,7 @@ class SMSNotifier:
                             continue
 
                         # Send message text followed by Ctrl+Z
-                        ser.write(message.encode("ascii", errors="replace"))
+                        ser.write(sms_safe_text(message).encode("ascii", errors="replace"))
                         ser.write(b"\x1a")  # Ctrl+Z to send
 
                         # Wait for response

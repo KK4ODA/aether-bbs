@@ -209,6 +209,16 @@ class ModemInstanceManager:
         sm = cfg.soundmodem
         protocol = sm.protocol.upper()
 
+        # Already attached: Start must not open a second AGWPE connection
+        # (and launch a second Soundmodem) beside the first, as the VARA
+        # and Aether paths already guard against
+        if status.mux is not None:
+            if status.mux.state.name != "DISCONNECTED":
+                log.info(f"[{cfg.name}] Already attached to Soundmodem, skipping start")
+                return
+            status.mux.disconnect()
+            status.mux = None
+
         # Auto-launch soundmodem executable if configured
         if sm.auto_launch and sm.exe_path:
             import os, subprocess

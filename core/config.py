@@ -490,7 +490,6 @@ def _get_delivery_config_class():
 
 # ── Config path resolution ────────────────────────────────────────────────────
 
-APP_NAME          = "Aether BBS"
 def overlay(base: BaseModel, update: BaseModel) -> BaseModel:
     """Return *base* with the fields *update* was explicitly given laid over
     it, recursing into nested sections.  Fields *update* never set keep

@@ -570,27 +570,4 @@ class SMTPBackend(OutboundDeliveryBackend):
                 if pid not in self._provider_health:
                     self._provider_health[pid] = BackendHealth.HEALTHY
 
-    def add_provider(self, config: SMTPProviderConfig) -> None:
-        """Add a provider at runtime."""
-        with self._lock:
-            self._providers.append(config)
-            self._provider_health[config.provider_id] = BackendHealth.HEALTHY
-
-    def remove_provider(self, provider_id: str) -> bool:
-        """Remove a provider at runtime."""
-        with self._lock:
-            before = len(self._providers)
-            self._providers = [p for p in self._providers if p.provider_id != provider_id]
-            self._provider_health.pop(provider_id, None)
-            return len(self._providers) < before
-
-    def get_provider_health(self, provider_id: str) -> BackendHealth:
-        with self._lock:
-            return self._provider_health.get(provider_id, BackendHealth.DISABLED)
-
-    def reset_provider_health(self, provider_id: str) -> None:
-        """Reset a provider to HEALTHY (manual recovery)."""
-        if provider_id in self._provider_health:
-            self._provider_health[provider_id] = BackendHealth.HEALTHY
-
 

@@ -125,29 +125,6 @@ def format_connect_path(path_str: str) -> str:
 
 # ── Frame factory helpers ─────────────────────────────────────────────────────
 
-def make_frame_from_vara_event(
-    event: str,
-    instance_name: str = "",
-) -> Optional[AX25Frame]:
-    """
-    Build a basic AX25Frame from a VARA FM CONNECTED event string.
-    e.g. "CONNECTED W1ABC-10 W9XYZ"
-    """
-    parts = event.strip().split()
-    if len(parts) < 3:
-        return None
-
-    src  = parse_callsign(parts[1])
-    dest = parse_callsign(parts[2])
-    if not src or not dest:
-        return None
-
-    return AX25Frame(
-        source=dest,        # the remote station is the source of the call
-        destination=src,    # our BBS is the destination
-        frame_type="CONNECT",
-    )
-
 
 # ── Frame encoding ───────────────────────────────────────────────────────────
 
