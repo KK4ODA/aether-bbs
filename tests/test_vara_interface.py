@@ -126,3 +126,96 @@ def test_quiet_command_port_keeps_the_link(monkeypatch):
     finally:
         iface.disconnect()
         sim.stop()
+
+
+def _threads(prefix):
+    return [t for t in threading.enumerate() if t.name == prefix and t.is_alive()]
+
+
+def test_reconnect_does_not_leave_old_io_threads(monkeypatch):
+    """After the modem drops and the BBS reconnects there is one reader and
+    one writer per socket, not two writers draining the same TX queue."""
+    import vara.interface as vi
+    monkeypatch.setattr(vi, "SOCKET_POLL_TIMEOUT", 0.3)
+    port = _free_port_pair()
+    sim = VARAFMSimulator(port, port + 1)
+    sim.start()
+    bus = EventBus()
+    cfg = InstanceConfig(name="Rc", cmd_port=port, data_port=port + 1,
+                         executable_path="", auto_start=False)
+    iface = VARAFMInterfaceWithCall(cfg, bus, "W1TEST-10")
+    try:
+        threading.Thread(target=iface.connect, daemon=True).start()
+        assert sim.wait_for_client(timeout=5.0)
+        sim.wait_for_command("LISTEN")
+        # the modem drops the TCP link
+        import socket as _socket
+        for s in (sim._cmd_client, sim._data_client):
+            s.shutdown(_socket.SHUT_RDWR)
+            s.close()
+        assert _wait(lambda: iface.state == VARAFMState.DISCONNECTED)
+        sim._cmd_client = sim._data_client = None
+        threading.Thread(target=iface.connect, daemon=True).start()
+        assert sim.wait_for_client(timeout=5.0)
+        assert _wait(lambda: iface.state != VARAFMState.DISCONNECTED)
+        time.sleep(1.0)   # let any stale thread notice its socket is gone
+        assert len(_threads("DataTx-Rc")) == 1
+        assert len(_threads("DataRx-Rc")) == 1
+        assert len(_threads("CmdRx-Rc")) == 1
+    finally:
+        iface.disconnect()
+        sim.stop()
+
+
+class _FakeDriver:
+    def __init__(self):
+        self.calls = []
+
+    def set_ptt(self, on):
+        self.calls.append(on)
+
+    def description(self):
+        return "fake"
+
+
+def test_ptt_released_when_modem_link_drops():
+    from vara.broker import TNCBroker
+    from vara.ptt import PTTController
+    driver = _FakeDriver()
+    ptt = PTTController("HF", driver, EventBus(), watchdog_timeout=90)
+    ptt._ptt_on = True                       # keyed when the link dropped
+    broker = TNCBroker.__new__(TNCBroker)
+    broker.cfg = InstanceConfig(name="HF")
+    broker._rig_control = None
+    broker._ptt = ptt
+    broker._retired = True                   # skip the reconnect thread
+    broker._on_vara_disconnected(type("E", (), {"source": "HF"})())
+    assert driver.calls == [False] and ptt._ptt_on is False
+    ptt.release("again")                     # unkeyed already: nothing to do
+    assert driver.calls == [False]
+
+
+def test_reconnect_keeps_trying_until_the_modem_is_back(monkeypatch):
+    import vara.broker as vb
+    from vara.broker import TNCBroker
+    sleeps = []
+    monkeypatch.setattr(vb.time, "sleep", sleeps.append)
+
+    class Iface:
+        attempts = 0
+        state = VARAFMState.DISCONNECTED
+
+        def connect(self):
+            Iface.attempts += 1
+            if Iface.attempts == 4:
+                Iface.state = VARAFMState.LISTENING
+
+    broker = TNCBroker.__new__(TNCBroker)
+    broker.cfg = InstanceConfig(name="HF")
+    broker._retired = False
+    broker._interface = Iface()
+    relays = []
+    broker._start_data_relay = lambda: relays.append(1)
+    broker._reconnect_loop()
+    assert Iface.attempts == 4 and relays == [1]
+    assert sleeps == [5.0, 10.0, 20.0, 40.0]

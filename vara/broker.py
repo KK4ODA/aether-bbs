@@ -353,6 +353,8 @@ class TNCBroker:
 
     def _start_data_relay(self):
         """Relay incoming data bytes to the active handler."""
+        if self._data_relay_thread and self._data_relay_thread.is_alive():
+            return   # it reads through self._interface, so it survives a reconnect
         self._relay_stop.clear()
         self._data_relay_thread = threading.Thread(
             target=self._data_relay,
@@ -427,6 +429,10 @@ class TNCBroker:
         # Stop scanning — modem is gone, no point tuning the radio
         if self._rig_control:
             self._rig_control.stop()
+        # The modem can't send PTT OFF any more: unkey now rather than when
+        # the PTT watchdog fires
+        if self._ptt:
+            self._ptt.release("modem link lost")
         if self._retired:
             return
         log.warning(f"[{self.cfg.name}] {modem_label(self.cfg)} TCP dropped; "
@@ -438,11 +444,19 @@ class TNCBroker:
         ).start()
 
     def _reconnect_loop(self):
-        time.sleep(5)
-        if self._retired:
-            return
-        log.info(f"[{self.cfg.name}] Attempting {modem_label(self.cfg)} reconnect")
-        self._interface.connect()
-        if not self._retired and self._interface.state != VARAFMState.DISCONNECTED:
-            self._start_data_relay()
+        """Keep trying until the modem is back or this broker is retired
+        (a modem restart can take longer than one connect()'s retries)."""
+        delay = 5.0
+        while True:
+            time.sleep(delay)
+            if self._retired:
+                return
+            log.info(f"[{self.cfg.name}] Attempting {modem_label(self.cfg)} reconnect")
+            self._interface.connect()
+            if self._retired:
+                return
+            if self._interface.state != VARAFMState.DISCONNECTED:
+                self._start_data_relay()
+                return
+            delay = min(delay * 2, 60.0)
 

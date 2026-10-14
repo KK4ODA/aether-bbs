@@ -331,19 +331,23 @@ class VARAFMInterface:
         log.info(f"[{self.cfg.name}] {mode} initialised, listening")
 
     def _start_threads(self):
-        for target, name in [
-            (self._cmd_reader,  f"CmdRx-{self.cfg.name}"),
-            (self._data_reader, f"DataRx-{self.cfg.name}"),
-            (self._data_writer, f"DataTx-{self.cfg.name}"),
+        # Each thread keeps the socket it was started with and ends when that
+        # socket is replaced, so a reconnect never leaves an old writer
+        # draining the same TX queue onto the new socket.
+        cmd_sock, data_sock = self._cmd_sock, self._data_sock
+        for target, sock, name in [
+            (self._cmd_reader,  cmd_sock,  f"CmdRx-{self.cfg.name}"),
+            (self._data_reader, data_sock, f"DataRx-{self.cfg.name}"),
+            (self._data_writer, data_sock, f"DataTx-{self.cfg.name}"),
         ]:
-            t = threading.Thread(target=target, name=name, daemon=True)
+            t = threading.Thread(target=target, args=(sock,), name=name, daemon=True)
             t.start()
 
-    def _cmd_reader(self):
+    def _cmd_reader(self, sock: socket.socket):
         """Read lines from command socket; parse VARA FM events."""
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and self._cmd_sock is sock:
             try:
-                chunk = self._cmd_sock.recv(1024)
+                chunk = sock.recv(1024)
                 if not chunk:
                     break
                 self._cmd_buf += chunk.decode("ascii", errors="replace")
@@ -362,14 +366,15 @@ class VARAFMInterface:
                 continue
             except OSError:
                 break
-        if not self._stop_event.is_set():
+        # Report the loss once, and only for the connection still in use
+        if not self._stop_event.is_set() and self._cmd_sock is sock:
             self._handle_tcp_error()
 
-    def _data_reader(self):
+    def _data_reader(self, sock: socket.socket):
         """Read raw bytes from data socket into RX queue."""
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and self._data_sock is sock:
             try:
-                data = self._data_sock.recv(4096)
+                data = sock.recv(4096)
                 if not data:
                     break
                 self._rx_queue.put(data)
@@ -379,12 +384,12 @@ class VARAFMInterface:
             except OSError:
                 break
 
-    def _data_writer(self):
+    def _data_writer(self, sock: socket.socket):
         """Drain TX queue to data socket."""
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and self._data_sock is sock:
             try:
                 data = self._tx_queue.get(timeout=0.5)
-                self._data_sock.sendall(data)
+                sock.sendall(data)
             except queue.Empty:
                 continue
             except OSError as e:

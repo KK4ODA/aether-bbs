@@ -696,6 +696,20 @@ class PTTController:
             self._watchdog_timer.cancel()
             self._watchdog_timer = None
 
+    def release(self, reason: str) -> None:
+        """Unkey now if keyed (e.g. the modem link is gone and can't send
+        PTT OFF)."""
+        self._cancel_watchdog()
+        with self._lock:
+            if not self._ptt_on:
+                return
+            self._ptt_on = False
+        log.warning(f"[{self._name}] PTT released: {reason}")
+        try:
+            self._driver.set_ptt(False)
+        except Exception as e:
+            log.error(f"[{self._name}] PTT driver error on release: {e}")
+
     def _watchdog_expired(self):
         """
         Safety cutoff — release PTT if modem hasn't sent PTT OFF
