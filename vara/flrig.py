@@ -28,9 +28,10 @@ import logging
 import queue
 import socket
 import threading
-import time
 import xmlrpc.client
 from typing import Any, Optional, Tuple
+
+from core.reconnect import Backoff, retry
 
 log = logging.getLogger(__name__)
 
@@ -189,32 +190,29 @@ class FLrigClient:
         # Connect to FLrig (with socket timeout to prevent indefinite hangs)
         old_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(10.0)
-        retries = 3
-        for attempt in range(retries):
+        last_error: list[Exception] = []
+
+        def attempt() -> bool:
             try:
                 self._proxy = xmlrpc.client.ServerProxy(url, allow_none=True)
                 # Verify connection by requesting the version
                 self._version = self._proxy.main.get_version()
-                log.info(
-                    f"Connected to FLrig at {url} (version: {self._version})"
-                )
-                break
+                return True
             except Exception as e:
-                if attempt < retries - 1:
-                    log.info(
-                        f"FLrig connect attempt {attempt + 1} failed, retrying..."
-                    )
-                    time.sleep(1.0)
-                else:
-                    self._error = (
-                        f"Cannot connect to FLrig at {url}. "
-                        f"Is FLrig running?  Error: {e}"
-                    )
-                    self._ready.set()
-                    socket.setdefaulttimeout(old_timeout)
-                    return
+                last_error[:] = [e]
+                return False
 
+        connected = retry(
+            attempt, Backoff(1.0, 1.0), max_attempts=3,
+            on_retry=lambda n, _d: log.info(
+                f"FLrig connect attempt {n} failed, retrying..."))
         socket.setdefaulttimeout(old_timeout)
+        if not connected:
+            self._error = (f"Cannot connect to FLrig at {url}. "
+                           f"Is FLrig running?  Error: {last_error[0]}")
+            self._ready.set()
+            return
+        log.info(f"Connected to FLrig at {url} (version: {self._version})")
 
         # Try to read initial frequency for info
         try:

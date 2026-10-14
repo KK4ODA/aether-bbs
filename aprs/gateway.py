@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Optional
 
 from core.config import AppConfig, ConfigManager
+from core.reconnect import Backoff, retry
 from core.events import EventBus, EventType
 from core.version import get_version
 from vara.rigcontrol import _hour_in_range
@@ -108,17 +109,20 @@ class APRSGateway:
     # ── Connection management ─────────────────────────────────────────────
 
     def _connect_loop(self, stop: threading.Event):
-        delay = RECONNECT_BASE
-        while not stop.is_set():
+        backoff = Backoff(RECONNECT_BASE, RECONNECT_MAX)
+
+        def session() -> bool:
+            # one connection, until it drops; never "done", so it is
+            # always followed by a wait and a reconnect until stopped
             try:
                 self._connect(stop)
-                delay = RECONNECT_BASE   # reset on success
+                backoff.reset()          # a good session: start again at base
             except Exception as e:
                 log.error(f"APRS-IS connect error: {e}")
-            if not stop.is_set():
-                log.info(f"APRS-IS reconnect in {delay}s")
-                stop.wait(delay)
-                delay = min(delay * 2, RECONNECT_MAX)
+            return False
+
+        retry(session, backoff, should_stop=stop.is_set, wait=stop.wait,
+              on_retry=lambda _n, delay: log.info(f"APRS-IS reconnect in {delay}s"))
 
     def _connect(self, stop: threading.Event):
         cfg = self._config.aprs
