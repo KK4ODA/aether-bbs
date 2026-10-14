@@ -169,9 +169,7 @@
   "sms_serial_port": "",
   "topic": "aether-bbs",
   "urgent_bulletin_areas": [
-   "EMCOMM",
-   "WX",
-   "ARES"
+   "EMCOMM"
   ]
  },
  "outbound_delivery": {

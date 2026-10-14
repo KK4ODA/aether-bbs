@@ -272,12 +272,35 @@ class BrowseTab(QWidget):
 
 class PostTab(QWidget):
 
-    def __init__(self, bbs: BulletinStore, config: AppConfig, event_bus=None, parent=None):
+    def __init__(self, bbs: BulletinStore, config: AppConfig, event_bus=None,
+                 config_manager=None, parent=None):
         super().__init__(parent)
         self._bbs    = bbs
         self._config = config
         self._bus    = event_bus
+        self._cm     = config_manager
         self._build_ui()
+
+    def _urgent_areas(self) -> set[str]:
+        """Areas the sysop listed as urgent, from the live config."""
+        cfg = (self._cm.current() if self._cm else None) or self._config
+        return {a.strip().upper()
+                for a in cfg.notifications.urgent_bulletin_areas if a.strip()}
+
+    def _update_area_note(self, *_):
+        group = self._group_combo.currentText().strip().upper()
+        if group and group in self._urgent_areas():
+            self._area_note.setText(
+                f"🚨 {group} is an urgent area (Settings → Notifications): "
+                f"every bulletin posted here is treated as urgent, "
+                f"ticked or not.")
+            self._area_note.show()
+        else:
+            self._area_note.hide()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._update_area_note()     # the urgent list may have changed
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -308,6 +331,13 @@ class PostTab(QWidget):
         group_row.addStretch()
         form.addLayout(group_row)
 
+        self._area_note = QLabel()
+        self._area_note.setWordWrap(True)
+        self._area_note.setStyleSheet(f"color:{RED};font-size:9pt;")
+        form.addWidget(self._area_note)
+        self._group_combo.currentTextChanged.connect(self._update_area_note)
+        self._update_area_note()
+
         # Subject
         subj_row = QHBoxLayout()
         subj_row.addWidget(QLabel("Subject:"))
@@ -329,7 +359,8 @@ class PostTab(QWidget):
         self._urgent_cb = QCheckBox("🚨 Urgent")
         self._urgent_cb.setToolTip(
             "Flag this bulletin as URGENT.\n"
-            "Triggers push notifications and alerts RF users on connect."
+            "Alerts RF users on connect and, for bulletins from other\n"
+            "stations, triggers push notifications."
         )
         btn_row.addWidget(self._urgent_cb)
         btn_row.addStretch()
@@ -401,7 +432,8 @@ class PostTab(QWidget):
         # Emit BULLETIN_POSTED so notification router and other
         # subscribers are informed (fixes event-emission gap).
         if self._bus:
-            self._bus.emit(EventType.BULLETIN_POSTED, source="SYSOP-GUI",
+            from notifications import SYSOP_GUI
+            self._bus.emit(EventType.BULLETIN_POSTED, source=SYSOP_GUI,
                            data={
                                "mid":       mid,
                                "from":      from_call,
@@ -571,12 +603,14 @@ class BulletinsTab(QWidget):
         bbs: Optional[BulletinStore],
         config: AppConfig,
         event_bus=None,
+        config_manager=None,
         parent=None,
     ):
         super().__init__(parent)
         self._bbs    = bbs
         self._config = config
         self._bus    = event_bus
+        self._cm     = config_manager
         self._build_ui()
 
     def _build_ui(self):
@@ -596,7 +630,8 @@ class BulletinsTab(QWidget):
             "📋 Browse"
         )
         tabs.addTab(
-            PostTab(self._bbs, self._config, event_bus=self._bus, parent=self),
+            PostTab(self._bbs, self._config, event_bus=self._bus,
+                    config_manager=self._cm, parent=self),
             "📢 Post"
         )
         tabs.addTab(

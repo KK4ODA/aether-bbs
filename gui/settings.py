@@ -2009,8 +2009,8 @@ class SettingsTab(QScrollArea):
         )
         self._notify_urgent_bulletin.setChecked(cfg.notify_on_urgent_bulletin)
         self._notify_urgent_bulletin.setToolTip(
-            "Send a push notification when a bulletin is posted\n"
-            "to one of the urgent areas listed below.\n"
+            "Send a push notification when another station posts an\n"
+            "urgent bulletin, or any bulletin to one of the areas below.\n"
             "Also alerts RF users on connect if urgent bulletins exist."
         )
         trigger_form.addRow("", self._notify_urgent_bulletin)
@@ -2019,7 +2019,7 @@ class SettingsTab(QScrollArea):
             ", ".join(cfg.urgent_bulletin_areas)
             if cfg.urgent_bulletin_areas else ""
         )
-        self._urgent_areas.setPlaceholderText("EMCOMM, WX, ARES")
+        self._urgent_areas.setPlaceholderText("EMCOMM")
         self._urgent_areas.setToolTip(
             "Comma-separated bulletin area names considered urgent.\n"
             "Bulletins posted to these areas trigger a push notification\n"

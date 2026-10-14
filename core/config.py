@@ -97,7 +97,7 @@ class NotificationConfig(BaseModel):
     notify_on_registration:    bool       = True   # new user awaiting sysop approval
     notify_on_urgent_bulletin: bool       = True   # bulletin posted to an urgent area
     urgent_bulletin_areas:     list[str]  = Field(
-        default_factory=lambda: ["EMCOMM", "WX", "ARES"]
+        default_factory=lambda: ["EMCOMM"]
     )
 
 

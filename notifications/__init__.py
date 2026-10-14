@@ -16,6 +16,9 @@ from core.events import EventBus, EventType
 
 log = logging.getLogger(__name__)
 
+# Event source of bulletins the sysop posts from the Bulletins tab.
+SYSOP_GUI = "SYSOP-GUI"
+
 
 class NotificationRouter:
     """
@@ -68,6 +71,8 @@ class NotificationRouter:
         log.info(f"Registration notification dispatched for {callsign}")
 
     def _on_bulletin_posted(self, event):
+        if event.source == SYSOP_GUI:
+            return      # the sysop posted it; no need to alert them about it
         cfg = self._notify_cfg()
         if not cfg.notify_on_urgent_bulletin:
             return

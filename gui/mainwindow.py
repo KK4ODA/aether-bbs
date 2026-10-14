@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
         self._messages_group.addTab(
             BulletinsTab(
                 self._bbs, self._config,
-                event_bus=self._bus, parent=self
+                event_bus=self._bus, config_manager=self._cm, parent=self
             ),
             "Bulletins"
         )
