@@ -107,3 +107,41 @@ def test_overlay_keeps_unset_fields_and_replaces_lists():
     out = overlay(base, upd)
     assert (out.bbs.message_dir, out.bbs.session_timeout) == ("X:/m", 300)
     assert [i.name for i in out.instances] == ["C"]
+
+
+def test_check_for_updates_reports_back(qapp, tmp_path, monkeypatch):
+    """The manual check runs on a worker thread; its result must reach the
+    tab (it used to stay at "Checking ..." with the button disabled)."""
+    import time
+    from core.updater import Updater, UpdateCheckResult
+    monkeypatch.setattr(Updater, "check_for_updates",
+                        lambda self, manual=False: UpdateCheckResult(current_version="9.9.9"))
+    cm, tab = _tab(tmp_path, '[[instances]]\nname = "VHF"\n')
+    tab._on_check_updates()
+    deadline = time.time() + 5
+    while time.time() < deadline and not tab._upd_check_btn.isEnabled():
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert tab._upd_check_btn.isEnabled()
+    assert "Up to date" in tab._upd_status.text()
+
+
+def test_one_bad_value_does_not_wipe_the_config(tmp_path):
+    """A value that fails validation resets its own section only; the
+    callsign and the machine secret (which every stored password depends
+    on) survive."""
+    from core.config import ConfigManager
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text(
+        '[station]\nbbs_callsign = "KK4ODA-1"\n'
+        '[security]\nmachine_secret = "s3cret-abc"\n'
+        '[bbs]\nsession_timeout = -5\nwelcome_message = "hi"\n'
+        '[aprs]\nbeacon_symbol = "\\\\k"\n')
+    cfg = ConfigManager(path).load()
+    assert cfg.station.bbs_callsign == "KK4ODA-1"
+    assert cfg.security.machine_secret == "s3cret-abc"
+    assert cfg.aprs.beacon_symbol == "\\k"
+    assert cfg.bbs.session_timeout > 0                 # the bad section reset
+    assert list(tmp_path.glob("aether_bbs.toml.bad.*"))  # original kept
+    again = ConfigManager(path).load()                  # and the saved file loads
+    assert again.security.machine_secret == "s3cret-abc"

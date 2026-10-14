@@ -258,3 +258,44 @@ def test_dispatcher_routes_only_rf_neighbours():
     assert pick("K9TCP-10") is None       # TCP neighbours log in like users
     assert pick("N0OFF-10") is None
     assert pick("W2BBB-1") is None
+
+
+def _scripted(lines):
+    """recv() returning *lines* then None; send() collecting into a list."""
+    it = iter(lines)
+    sent: list[str] = []
+    return sent.append, (lambda: next(it, None)), sent
+
+
+def test_server_never_forwards_a_private_message(tmp_path):
+    from bbs.bulletins import BulletinForwardingServer
+    cfg, store, bbs = _stores(tmp_path, "s")
+    private = store.save_message("W1AAA", "N0VIC", "private", b"TOP SECRET")
+    send, recv, sent = _scripted(["FWD HELLO W2BBB-10", f"FWD GET {private}"])
+    BulletinForwardingServer(cfg, store, bbs, EventBus()).serve(send=send, recv=recv)
+    assert f"FWD NAK {private}" in sent
+    assert not any(s.startswith("FWD DATA") or "TOP SECRET" in s for s in sent)
+
+
+def test_unacknowledged_bulletin_is_offered_again(tmp_path):
+    from bbs.bulletins import BulletinForwarder
+    cfg, store, bbs = _stores(tmp_path, "a")
+    cfg.station.bbs_callsign = "W1AAA-10"
+    mid = bbs.save_bulletin("W1AAA", "ALL", "news", b"body", area="ALL")
+    nbr = ForwardingNeighbourConfig(bbs_callsign="W2BBB-10")
+    # the neighbour asks for it, then the link drops before its ACK
+    send, recv, sent = _scripted(["FWD HELLO W2BBB-10", f"FWD GET {mid}"])
+    BulletinForwarder(cfg, store, bbs, EventBus())._exchange(send, recv, nbr)
+    assert any(s.startswith(f"FWD DATA {mid}") for s in sent)
+    assert [r["id"] for r in bbs.get_unsent_bulletins_for("W2BBB-10")] == [mid]
+
+
+def test_bulletin_cut_off_mid_body_is_not_stored(tmp_path):
+    from bbs.bulletins import BulletinForwarder
+    cfg, store, bbs = _stores(tmp_path, "b")
+    nbr = ForwardingNeighbourConfig(bbs_callsign="W1AAA-10")
+    send, recv, sent = _scripted([
+        "FWD DATA MID0001 W1AAA ALL - news", "FWD BODY", "first line"])  # no FWD END
+    BulletinForwarder(cfg, store, bbs, EventBus())._receive_bulletin(send, recv, "MID0001", nbr)
+    assert not store.has_message("MID0001")
+    assert not any(s.startswith("FWD ACK") for s in sent)

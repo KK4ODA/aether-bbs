@@ -638,11 +638,15 @@ class BulletinForwarder:
             )
             ack = recv()
             if ack and ack.startswith(self._FWD_GET):
-                # They want it — send it
-                self._send_bulletin(send, recv, row)
-                self._bbs.mark_seen(row["id"], neighbour.bbs_callsign)
-                self._bbs.log_forward(neighbour.bbs_callsign, "sent", row["id"])
-                log.info(f"Forwarded MID={row['id']} → {neighbour.bbs_callsign}")
+                # They want it — send it; it counts as delivered only once
+                # they acknowledge it, otherwise it is offered again next time
+                if self._send_bulletin(send, recv, row):
+                    self._bbs.mark_seen(row["id"], neighbour.bbs_callsign)
+                    self._bbs.log_forward(neighbour.bbs_callsign, "sent", row["id"])
+                    log.info(f"Forwarded MID={row['id']} → {neighbour.bbs_callsign}")
+                else:
+                    log.warning(f"{neighbour.bbs_callsign} did not acknowledge "
+                                f"MID={row['id']}; will offer it again")
             elif ack is None:
                 log.warning(f"Forwarding to {neighbour.bbs_callsign}: no reply "
                             f"to offer of {row['id']}")
@@ -712,7 +716,7 @@ class BulletinForwarder:
         send(self._FWD_END)
 
         ack = recv()
-        return ack and ack.startswith(self._FWD_ACK)
+        return bool(ack and ack.startswith(self._FWD_ACK))
 
     def _receive_bulletin(self, send, recv, mid: str, neighbour):
         """Receive a bulletin from the neighbour and store it.
@@ -762,7 +766,13 @@ class BulletinForwarder:
         lines = []
         while True:
             line = recv()
-            if line is None or line.startswith(self._FWD_END):
+            if line is None:
+                # the link dropped mid-body: storing the partial copy would
+                # block the full one forever (duplicate MID), so drop it
+                log.warning(f"Bulletin MID={mid} from {neighbour.bbs_callsign} "
+                            f"cut off before FWD END; not stored")
+                return
+            if line.startswith(self._FWD_END):
                 break
             lines.append(line)
 
@@ -998,19 +1008,17 @@ class BulletinForwardingServer:
                     else:
                         # Send a specific bulletin by MID
                         msg = self._store.get_message(requested_mid)
-                        if msg:
+                        # Bulletins only: a private message is never
+                        # forwarded, whatever MID a peer asks for
+                        if msg and msg.get("is_bulletin"):
                             row = dict(msg)
-                            fwd._send_bulletin(send, recv, row)
-                            self._bbs.mark_seen(
-                                requested_mid, remote_call
-                            )
-                            self._bbs.log_forward(
-                                remote_call, "sent", requested_mid
-                            )
-                            log.info(
-                                f"Forwarded MID={requested_mid} → "
-                                f"{remote_call} (inbound session)"
-                            )
+                            if fwd._send_bulletin(send, recv, row):
+                                self._bbs.mark_seen(requested_mid, remote_call)
+                                self._bbs.log_forward(remote_call, "sent", requested_mid)
+                                log.info(
+                                    f"Forwarded MID={requested_mid} → "
+                                    f"{remote_call} (inbound session)"
+                                )
                         else:
                             send(
                                 f"{BulletinForwarder._FWD_NAK} "

@@ -341,6 +341,15 @@ class TestAuthentication(unittest.TestCase):
         self.assertTrue(self.ac.has_password("USER1"))
         self.assertTrue(self.ac.has_password("USER1-7"))
 
+    def test_set_password_for_station_without_access_row(self):
+        # e.g. the sysop after a callsign change: SETPASS used to report
+        # success while storing nothing
+        self.assertFalse(self.ac.has_password("NEWSYS"))
+        self.ac.set_password("NEWSYS", "fresh-pw")
+        self.assertTrue(self.ac.has_password("NEWSYS"))
+        self.ac.generate_challenge("NEWSYS")
+        self.assertTrue(self.ac.verify_challenge("NEWSYS", "fresh-pw"))
+
     def test_challenge_response_correct(self):
         self.ac.set_password("USER1", "hunter2")
         nonce = self.ac.generate_challenge("USER1")
