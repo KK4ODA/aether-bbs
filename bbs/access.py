@@ -12,7 +12,6 @@ Shares the MessageStore's SQLite connection (messages.db) for the
 access_control and security_audit tables.
 """
 
-import base64
 import hashlib
 import hmac as hmac_mod
 import logging

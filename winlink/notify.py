@@ -15,7 +15,6 @@ Notification channels:
 """
 
 import logging
-from typing import Optional
 
 from core.events import EventBus, EventType, Event
 

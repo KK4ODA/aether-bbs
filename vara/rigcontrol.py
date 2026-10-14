@@ -33,7 +33,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from vara.omnirig import OmniRigClient, OMNIRIG_MODES
+from vara.omnirig import OmniRigClient
 
 log = logging.getLogger(__name__)
 

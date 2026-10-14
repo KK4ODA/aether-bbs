@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (
     QTextEdit, QLineEdit, QComboBox,
     QPushButton, QLabel, QCheckBox
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QTextCharFormat, QFont
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QColor, QFont
 
 from core.logging_manager import gui_log_queue
 

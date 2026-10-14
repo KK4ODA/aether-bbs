@@ -18,7 +18,7 @@ except ImportError:
     import tomli as tomllib  # backport for 3.9/3.10
 
 import tomli_w
-from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 log = logging.getLogger(__name__)
 

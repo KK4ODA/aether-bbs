@@ -25,17 +25,14 @@ Three window classes + the AlertManager service:
 
 import logging
 import threading
-import time
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
-    QPushButton, QFrame, QDialogButtonBox, QSizePolicy, QSplitter,
-    QGroupBox, QScrollArea,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
+    QPushButton, QFrame, QGroupBox,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, pyqtSlot
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QFont
 
 from bbs.store import MessageStore
 from core.config import AppConfig, AlertConfig

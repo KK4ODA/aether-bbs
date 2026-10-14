@@ -22,10 +22,9 @@ import socket
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from bbs.store import MessageStore, MessageStatus

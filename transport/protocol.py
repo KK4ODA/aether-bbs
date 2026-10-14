@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from enum import Enum, auto
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ import logging
 import threading
 from enum import Enum, auto
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 from datetime import datetime
 
 log = logging.getLogger(__name__)

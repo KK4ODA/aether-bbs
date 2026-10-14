@@ -7,7 +7,6 @@ import signal
 import atexit
 import logging
 import threading
-from pathlib import Path
 
 # Qt must be imported before other app modules that use it
 from PyQt6.QtWidgets import QApplication

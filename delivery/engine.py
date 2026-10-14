@@ -15,12 +15,9 @@ The engine runs on a background thread, processing the delivery queue
 at configurable intervals.  All state transitions are logged.
 """
 
-import json
 import logging
-import math
 import random
 import threading
-import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -28,11 +25,9 @@ from delivery.models import (
     DeliveryBackendType,
     DeliveryStatus,
     DeliveryResult,
-    BackendHealth,
     FailoverEvent,
     FailoverEventType,
     MessageDeliveryState,
-    WinlinkTransportType,
 )
 from delivery.backends import (
     OutboundDeliveryBackend,

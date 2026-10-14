@@ -11,9 +11,9 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QTextEdit, QPushButton, QLabel, QComboBox,
+    QPushButton, QLabel, QComboBox,
     QLineEdit, QMessageBox, QFileDialog, QGroupBox,
-    QFormLayout, QDialog, QDialogButtonBox, QProgressBar,
+    QFormLayout, QDialog, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont

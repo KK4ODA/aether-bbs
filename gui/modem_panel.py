@@ -11,17 +11,14 @@ import json
 import logging
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLabel, QPushButton, QScrollArea, QFrame, QSizePolicy,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QLineEdit, QTextEdit, QComboBox, QInputDialog
+    QLabel, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QHeaderView,
+    QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
-from PyQt6.QtGui import QColor
 
 from core.config import AppConfig
 from core.events import EventBus, EventType
 from vara.instance_manager import ModemInstanceManager
-from vara.process import ProcessState
 from gui.theme import STATE_COLORS
 from gui.aether_heard import AetherHeardPanel
 

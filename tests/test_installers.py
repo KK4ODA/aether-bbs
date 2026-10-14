@@ -61,7 +61,7 @@ def test_installed_copy_keeps_data_in_the_profile(tmp_path, monkeypatch):
 
 # ── installer assets ───────────────────────────────────────────────────────
 
-def _release(version="1.4.0", kinds=("windows-setup.exe", "macos.dmg",
+def _release(version="1.4.0", kinds=("windows-setup.exe", "macos.dmg", "macos-intel.dmg",
                                      "linux-x86_64.tar.gz")):
     return ReleaseInfo(version=version, tag=f"v{version}", assets={
         f"AetherBBS-{version}-{k}": f"https://example.invalid/AetherBBS-{version}-{k}"
@@ -71,7 +71,10 @@ def _release(version="1.4.0", kinds=("windows-setup.exe", "macos.dmg",
 def test_installer_asset_per_platform():
     rel = _release()
     assert installer_asset(rel, "win32")[0] == "AetherBBS-1.4.0-windows-setup.exe"
-    assert installer_asset(rel, "darwin")[0] == "AetherBBS-1.4.0-macos.dmg"
+    assert installer_asset(rel, "darwin", "arm64")[0] == "AetherBBS-1.4.0-macos.dmg"
+    assert installer_asset(rel, "darwin", "x86_64")[0] == "AetherBBS-1.4.0-macos-intel.dmg"
+    # a release from before the Intel build: an Intel Mac is not offered the ARM image
+    assert installer_asset(_release(kinds=("macos.dmg",)), "darwin", "x86_64") is None
     assert installer_asset(rel, "linux")[0] == "AetherBBS-1.4.0-linux-x86_64.tar.gz"
     assert installer_asset(_release(kinds=("macos.dmg",)), "win32") is None
     assert installer_suffix("win32") == "-windows-setup.exe"
@@ -129,6 +132,7 @@ def test_macos_opens_the_disk_image(tmp_path, monkeypatch):
     up = _frozen_updater(tmp_path, monkeypatch, _release(), b"dmg")
     check = up.check_for_updates()
     monkeypatch.setattr(updater_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(updater_mod._platform, "machine", lambda: "arm64")
     monkeypatch.setattr(updater_mod.Path, "home", lambda: tmp_path / "home")
     opened = []
     monkeypatch.setattr(updater_mod.subprocess, "Popen", lambda args, **kw: opened.append(args))

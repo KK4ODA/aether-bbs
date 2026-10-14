@@ -10,16 +10,13 @@ Handles the full Winlink message exchange session:
 """
 
 import zlib
-import time
 import random
 import logging
 import binascii
-import threading
 from typing import Optional, Callable
 
 from bbs.store import MessageStore
 from bbs.bulletins import BulletinStore, is_bulletin_address
-from core.config import AppConfig
 
 log = logging.getLogger(__name__)
 
