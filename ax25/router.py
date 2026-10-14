@@ -9,10 +9,9 @@ Packet routing logic:
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from core.events import EventBus, EventType
-from ax25.parser import AX25Frame, AX25Address, parse_callsign, parse_path
+from ax25.parser import AX25Frame, parse_callsign, parse_path
 
 log = logging.getLogger(__name__)
 pkt_log = logging.getLogger("packet")

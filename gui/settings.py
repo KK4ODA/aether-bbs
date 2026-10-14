@@ -8,17 +8,16 @@ Settings requiring VARA reconnect show a warning indicator.
 
 import logging
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
-    QFormLayout, QLineEdit, QCheckBox, QSpinBox, QDoubleSpinBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QCheckBox, QSpinBox, QDoubleSpinBox,
     QComboBox, QPushButton, QLabel, QGroupBox,
     QFileDialog, QMessageBox, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QDialog, QDialogButtonBox,
     QListWidget, QListWidgetItem, QStackedWidget, QSplitter,
-    QAbstractItemView, QSizePolicy,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QFont
 
 from core.config import (AppConfig, ConfigManager, InstanceConfig, PTTConfig,
                           RigControlConfig, ScanChannelConfig, SoundmodemConfig,
@@ -2389,8 +2388,7 @@ class SettingsTab(QScrollArea):
 
     def _file_upload_tab(self) -> QWidget:
         from PyQt6.QtWidgets import (
-            QScrollArea, QCheckBox, QSpinBox, QDoubleSpinBox,
-            QPlainTextEdit, QRadioButton, QButtonGroup,
+            QScrollArea, QCheckBox, QSpinBox, QPlainTextEdit, QRadioButton, QButtonGroup,
         )
         outer = QScrollArea()
         outer.setWidgetResizable(True)
@@ -3411,13 +3409,10 @@ class SettingsTab(QScrollArea):
 
     def _build_config(self) -> AppConfig:
         from core.config import (StationConfig, BBSConfig, APRSConfig,
-                                  LoggingConfig, GUIConfig, InstanceConfig,
-                                  PTTConfig, RigControlConfig,
-                                  BulletinAreaConfig, ForwardingNeighbourConfig,
-                                  ForwardingConfig, AlertConfig,
-                                  FileUploadConfig, WinlinkConfig, SecurityConfig,
+                                  LoggingConfig, BulletinAreaConfig, ForwardingNeighbourConfig,
+                                  AlertConfig,
+                                  FileUploadConfig, SecurityConfig,
                                   UpdaterConfig)
-        from delivery.config import OutboundDeliveryConfig
 
         # ── Instances ─────────────────────────────────────────────────────
         # Save current detail form to the model before building config

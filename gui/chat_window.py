@@ -25,15 +25,15 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QTextEdit, QLineEdit, QPushButton, QFrame, QSizePolicy,
+    QTextEdit, QLineEdit, QPushButton, QFrame,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QTextCursor, QFont, QKeyEvent
 
 from gui.theme import (
-    BG_DEEPEST, BG_DARK, BG_MEDIUM, BG_ELEVATED,
-    ACCENT, GREEN, YELLOW, RED,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+    BG_DEEPEST, BG_ELEVATED,
+    ACCENT, GREEN, RED,
+    TEXT_PRIMARY, TEXT_MUTED,
     BORDER_NORMAL,
 )
 

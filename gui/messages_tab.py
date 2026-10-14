@@ -15,13 +15,12 @@ New capabilities over the original:
 
 import logging
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QTextEdit, QPushButton, QLabel, QComboBox,
-    QLineEdit, QMessageBox, QAbstractItemView,
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView,
+    QPushButton, QLabel, QComboBox,
+    QMessageBox, QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QColor, QBrush
+from PyQt6.QtGui import QColor, QBrush
 
 from bbs.store import MessageStore
 from core.config import AppConfig

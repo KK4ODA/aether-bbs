@@ -7,7 +7,6 @@ Apply once at startup:  apply_theme(app)
 
 from PyQt6.QtWidgets import QApplication, QStyleFactory
 from PyQt6.QtGui import QFont, QPalette, QColor
-from PyQt6.QtCore import Qt
 
 # ── Discord colour palette ────────────────────────────────────────────────────
 # Background layers (darkest → lightest)

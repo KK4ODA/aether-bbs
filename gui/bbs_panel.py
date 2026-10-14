@@ -696,7 +696,6 @@ class BBSStatusPanel(QWidget):
         self._sessions_table.insertRow(row)
         call_item = QTableWidgetItem(call)
         call_item.setForeground(QColor("#2ECC71"))
-        from PyQt6.QtGui import QFont
         f = call_item.font()
         f.setBold(True)
         call_item.setFont(f)
@@ -716,7 +715,6 @@ class BBSStatusPanel(QWidget):
                 # Update callsign (column 1)
                 call_item = QTableWidgetItem(call)
                 call_item.setForeground(QColor("#2ECC71"))
-                from PyQt6.QtGui import QFont
                 f = call_item.font()
                 f.setBold(True)
                 call_item.setFont(f)

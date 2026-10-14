@@ -11,7 +11,6 @@ import logging
 import logging.handlers
 import queue
 from pathlib import Path
-from typing import Optional
 
 from core.config import LoggingConfig
 

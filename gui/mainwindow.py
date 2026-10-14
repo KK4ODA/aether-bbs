@@ -18,7 +18,7 @@ from gui.theme import GREEN, RED, YELLOW, TEXT_MUTED
 
 from core.config import AppConfig
 from core.config import ConfigManager
-from core.events import EventBus, EventType, Event
+from core.events import EventBus, EventType
 from vara.instance_manager import ModemInstanceManager
 from bbs.store import MessageStore
 

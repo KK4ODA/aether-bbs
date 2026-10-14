@@ -18,11 +18,10 @@ import queue
 import logging
 import threading
 import socket
-from datetime import datetime, timedelta
 from typing import Optional
 
 from bbs.store import MessageStore
-from core.config import AppConfig, BulletinAreaConfig, ForwardingNeighbourConfig
+from core.config import AppConfig, ForwardingNeighbourConfig
 from core.events import EventBus, EventType
 
 log = logging.getLogger(__name__)

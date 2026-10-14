@@ -11,14 +11,12 @@ Three sub-tabs:
 
 import logging
 from typing import Optional
-from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QGroupBox, QLabel, QPushButton, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton, QLineEdit,
     QTextEdit, QComboBox, QTabWidget, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QSizePolicy, QCheckBox,
+    QAbstractItemView, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -26,9 +24,7 @@ from PyQt6.QtGui import QFont, QColor
 from bbs.bulletins import BulletinStore
 from core.config import AppConfig
 from gui.theme import (
-    BG_DEEPEST, BG_DARK, BG_MEDIUM, BG_ELEVATED, BORDER_SUBTLE,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, TEXT_LINK,
-    ACCENT, GREEN, GREEN_DIM, RED, RED_DIM, BLUE,
+    BG_DEEPEST, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, GREEN, RED, BLUE,
     BTN_SUCCESS, BTN_DANGER, BTN_ACCENT,
 )
 

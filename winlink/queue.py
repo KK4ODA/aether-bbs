@@ -12,7 +12,6 @@ local for RF pickup.
 """
 
 import logging
-from typing import Optional
 
 from bbs.store import MessageStore, MessageStatus
 

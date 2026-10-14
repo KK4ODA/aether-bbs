@@ -10,7 +10,7 @@ callable that delivers text to them.
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from core.events import EventBus, EventType

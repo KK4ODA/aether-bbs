@@ -16,13 +16,10 @@ existing SettingsTab sub-tab layout.
 """
 
 import logging
-from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QGroupBox, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox,
-    QCheckBox, QComboBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit,
+    QGroupBox, QLabel, QLineEdit, QSpinBox, QCheckBox, QComboBox, QPushButton, QTextEdit,
     QListWidget, QSplitter, QFrame, QScrollArea,
 )
 from PyQt6.QtCore import Qt

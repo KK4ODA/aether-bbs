@@ -22,7 +22,6 @@ from bbs.b2f import B2FSession
 from bbs.interactive import InteractiveSession
 from bbs.bulletins import BulletinStore
 from bbs.filestore import FileStore
-from ax25.parser import parse_callsign
 from ax25.router import PacketRouter
 
 log = logging.getLogger(__name__)

@@ -23,8 +23,7 @@ _SYSOP_CHAT_INITIATE = object()
 
 # Sentinel pushed into _rx_queue when the sysop ends a chat from the GUI.
 _SYSOP_CHAT_END = object()
-from bbs.bulletins import BulletinStore, is_bulletin_address
-from bbs.filestore import FileStore, MAX_FILE_BYTES
+from bbs.bulletins import BulletinStore
 from core.config import AppConfig
 from core.events import EventBus, EventType
 
@@ -1436,7 +1435,6 @@ class InteractiveSession:
             self._converse.remove_user(self.remote_call)
 
     def _cmd_info(self):
-        from datetime import datetime
         self._send(f"BBS:       {self._config.station.bbs_callsign}\r\n")
         self._send(f"Sysop:     {self._config.station.sysop_callsign}\r\n")
         self._send(f"Grid:      {self._config.station.grid_square or 'N/A'}\r\n")
