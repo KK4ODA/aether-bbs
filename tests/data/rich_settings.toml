@@ -1,0 +1,85 @@
+[station]
+bbs_callsign = "W9BBS-10"
+sysop_callsign = "W9OP"
+grid_square = "EN52"
+latitude = 41.5
+longitude = -88.1
+beacon_interval = 20
+
+[[station.tactical_addresses]]
+callsign = "EOC1"
+alert_phrase = "EOC traffic"
+advertised = true
+
+[bbs]
+welcome_message = "Hello from W9BBS"
+session_timeout = 900
+max_message_age = 45
+max_sessions = 2
+
+[[bbs.bulletin_areas]]
+name = "WX"
+description = "Weather"
+enabled = true
+max_age = 7
+
+[[bbs.bulletin_areas]]
+name = "LOCAL"
+description = "Local news"
+enabled = false
+max_age = 30
+
+[[bbs.forwarding_neighbours]]
+bbs_callsign = "W2BBB-10"
+via = "TCP"
+host = "10.0.0.2"
+port = 7301
+interval_minutes = 30
+areas = ["WX", "LOCAL"]
+
+[bbs.forwarding]
+server_enabled = true
+server_port = 7302
+server_bind = "127.0.0.1"
+
+[aprs]
+enabled = true
+is_server = "noam.aprs2.net"
+is_port = 14580
+is_passcode = 12345
+is_filter = "r/41/-88/50"
+
+[logging]
+level = "INFO"
+packet_log = false
+chat_log = false
+
+[winlink]
+enabled = true
+gateway_callsign = "W9BBS"
+grid_square = "EN52ab"
+pat_exe_path = "/usr/bin/pat"
+pat_http_addr = "localhost:8081"
+forward_calls = ["W9AAA", "W9CCC"]
+
+[file_upload]
+allow_remote_uploads = true
+permission_mode = "role_based"
+
+[security]
+operational_mode = "emcomm"
+require_password = true
+auto_block_threshold = 25
+
+[updater]
+check_on_startup = false
+auto_check_interval_hours = 12
+channel = "latest"
+
+[[instances]]
+name = "HF"
+transport = "VARA_HF"
+cmd_port = 8300
+data_port = 8301
+bandwidth = 500
+frequency_label = "14.105"

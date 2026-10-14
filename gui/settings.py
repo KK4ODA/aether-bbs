@@ -3406,16 +3406,32 @@ class SettingsTab(QScrollArea):
             page_index += 1
 
     def _build_config(self) -> AppConfig:
-        from core.config import (StationConfig, BBSConfig, APRSConfig,
-                                  LoggingConfig, BulletinAreaConfig, ForwardingNeighbourConfig,
-                                  AlertConfig,
-                                  FileUploadConfig, SecurityConfig,
-                                  UpdaterConfig)
-
-        # ── Instances ─────────────────────────────────────────────────────
-        # Save current detail form to the model before building config
+        """The settings from the form, one section builder each, laid over
+        the saved settings so fields without a widget keep their values."""
+        # the instance detail form holds unsaved edits: write them to the
+        # instance list before it is read
         self._save_inst_detail()
+        built = AppConfig(
+            station=self._build_station(),
+            bbs=self._build_bbs(),
+            aprs=self._build_aprs(),
+            alert=self._build_alert(),
+            logging=self._build_logging(),
+            winlink=self._build_winlink(),
+            outbound_delivery=self._build_outbound_delivery_config(),
+            file_upload=self._build_file_upload(),
+            notifications=self._build_notifications(),
+            security=self._build_security(),
+            updater=self._build_updater(),
+            instances=self._build_instances(),
+        )
+        # Keep settings this tab has no widget for (message_dir, routing
+        # overrides, log rotation sizes ...) at their current values
+        from core.config import overlay
+        return overlay(self._cm.current() or self._config, built)
 
+    def _build_instances(self):
+        """Modem instances, from the instance list."""
         instances = []
         for d in self._inst_data:
             freq_label = d.get("frequency_label", "")
@@ -3429,8 +3445,56 @@ class SettingsTab(QScrollArea):
                 **base.model_dump(),
                 **self._instance_updates(d, freq_label),
             }))
+        return instances
 
-        # ── Bulletin areas ────────────────────────────────────────────────
+    def _build_station(self):
+        """Station: callsigns, position, beacon, tactical addresses."""
+        from core.config import StationConfig
+        return StationConfig(
+            bbs_callsign=self._bbs_call.text(),
+            sysop_callsign=self._sysop_call.text(),
+            grid_square=self._grid.text(),
+            latitude=self._latitude.value() or None,
+            longitude=self._longitude.value() or None,
+            beacon_interval=self._beacon_iv.value(),
+            beacon_text=self._beacon_txt.text(),
+            tactical_addresses=[
+                TacticalAddress(
+                    callsign=(self._tactical_table.item(r, 0).text() or "").upper()[:8],
+                    alert_phrase=(self._tactical_table.item(r, 1).text()
+                                  or "Priority message received"),
+                    advertised=(self._tactical_table.item(r, 2) is not None
+                                and self._tactical_table.item(r, 2).checkState()
+                                == Qt.CheckState.Checked),
+                )
+                for r in range(self._tactical_table.rowCount())
+                if self._tactical_table.item(r, 0)
+                and self._tactical_table.item(r, 0).text().strip()
+            ],
+        )
+
+    def _build_bbs(self):
+        """BBS: session settings, bulletin areas, forwarding."""
+        from core.config import BBSConfig
+        return BBSConfig(
+            welcome_message=self._welcome.text(),
+            show_connect_banner=self._show_banner.isChecked(),
+            session_timeout=self._timeout.value(),
+            max_message_age=self._msg_age.value(),
+            max_sessions=self._max_sess.value(),
+            session_watchdog_timeout=self._watchdog.value(),
+            bulletin_areas=self._build_bulletin_areas(),
+            forwarding=ForwardingConfig(
+                server_enabled=self._fwd_srv_en.isChecked(),
+                server_port=self._fwd_srv_port.value(),
+                server_bind=self._fwd_srv_bind.text().strip() or "0.0.0.0",
+            ),
+            forwarding_neighbours=self._build_neighbours(),
+        )
+
+    def _build_bulletin_areas(self):
+        """Bulletin areas, from their table."""
+        from core.config import BulletinAreaConfig
         bulletin_areas = []
         for row in range(self._bull_table.rowCount()):
             def bcell(c): return (self._bull_table.item(row, c) or QTableWidgetItem("")).text()
@@ -3445,8 +3509,11 @@ class SettingsTab(QScrollArea):
                     max_age=max_age,
                     enabled=bchk(3),
                 ))
+        return bulletin_areas
 
-        # ── Forwarding neighbours ─────────────────────────────────────────
+    def _build_neighbours(self):
+        """Forwarding neighbours, from their table."""
+        from core.config import ForwardingNeighbourConfig
         neighbours = []
         for row in range(self._fwd_table.rowCount()):
             def fcell(c): return (self._fwd_table.item(row, c) or QTableWidgetItem("")).text()
@@ -3470,8 +3537,66 @@ class SettingsTab(QScrollArea):
                     areas=raw_areas,
                     enabled=fchk(7),
                 ))
+        return neighbours
 
-        # ── File upload policy ───────────────────────────────────────────
+    def _build_aprs(self):
+        """APRS-IS."""
+        from core.config import APRSConfig
+        return APRSConfig(
+            enabled=self._aprs_en.isChecked(),
+            is_server=self._is_srv.text(),
+            is_port=self._is_port.value(),
+            is_passcode=self._is_pc.value(),
+            is_filter=self._is_filter.text(),
+        )
+
+    def _build_alert(self):
+        """Alerts."""
+        from core.config import AlertConfig
+        return AlertConfig(
+            audio_enabled=self._alert_audio_en.isChecked(),
+            visual_only=self._alert_visual_only.isChecked(),
+            alert_interval=self._alert_interval.value(),
+            volume=self._alert_volume.value(),
+            high_contrast=self._alert_high_contrast.isChecked(),
+            large_font=self._alert_large_font.isChecked(),
+            session_sounds=self._session_sounds.isChecked(),
+        )
+
+    def _build_logging(self):
+        """Logging."""
+        from core.config import LoggingConfig
+        return LoggingConfig(
+            level=self._log_level.currentText(),
+            log_dir=self._log_dir.text(),
+            packet_log=self._pkt_log.isChecked(),
+            vara_cmd_log=self._vara_cmd_log.isChecked(),
+            chat_log=self._chat_log.isChecked(),
+        )
+
+    def _build_winlink(self):
+        """Winlink (Pat)."""
+        return WinlinkConfig(
+            enabled=self._wl_enabled.isChecked(),
+            gateway_callsign=self._wl_callsign.text().strip().upper(),
+            gateway_password=self._encrypt_secret(
+                self._wl_password.text(),
+                self._saved().winlink.gateway_password),
+            grid_square=self._wl_grid.text().strip(),
+            pat_exe_path=self._wl_pat_exe.text().strip(),
+            pat_http_addr=self._wl_pat_addr.text().strip() or "localhost:8080",
+            auto_launch_pat=self._wl_auto_launch.isChecked(),
+            forward_calls=[
+                c.strip().upper()
+                for c in self._wl_fwd_calls.text().split(",")
+                if c.strip()
+            ],
+            cms_timeout=self._wl_cms_timeout.value(),
+        )
+
+    def _build_file_upload(self):
+        """File upload policy."""
+        from core.config import FileUploadConfig
         fu_exts = [
             e.strip() for e in
             self._fu_extensions.toPlainText().splitlines()
@@ -3497,153 +3622,78 @@ class SettingsTab(QScrollArea):
             self._fu_whitelist.toPlainText().splitlines()
             if c.strip()
         ]
-
-        built = AppConfig(
-            station=StationConfig(
-                bbs_callsign=self._bbs_call.text(),
-                sysop_callsign=self._sysop_call.text(),
-                grid_square=self._grid.text(),
-                latitude=self._latitude.value() or None,
-                longitude=self._longitude.value() or None,
-                beacon_interval=self._beacon_iv.value(),
-                beacon_text=self._beacon_txt.text(),
-                tactical_addresses=[
-                    TacticalAddress(
-                        callsign=(self._tactical_table.item(r, 0).text() or "").upper()[:8],
-                        alert_phrase=(self._tactical_table.item(r, 1).text()
-                                      or "Priority message received"),
-                        advertised=(self._tactical_table.item(r, 2) is not None
-                                    and self._tactical_table.item(r, 2).checkState()
-                                    == Qt.CheckState.Checked),
-                    )
-                    for r in range(self._tactical_table.rowCount())
-                    if self._tactical_table.item(r, 0)
-                    and self._tactical_table.item(r, 0).text().strip()
-                ],
-            ),
-            bbs=BBSConfig(
-                welcome_message=self._welcome.text(),
-                show_connect_banner=self._show_banner.isChecked(),
-                session_timeout=self._timeout.value(),
-                max_message_age=self._msg_age.value(),
-                max_sessions=self._max_sess.value(),
-                session_watchdog_timeout=self._watchdog.value(),
-                bulletin_areas=bulletin_areas,
-                forwarding=ForwardingConfig(
-                    server_enabled=self._fwd_srv_en.isChecked(),
-                    server_port=self._fwd_srv_port.value(),
-                    server_bind=self._fwd_srv_bind.text().strip() or "0.0.0.0",
-                ),
-                forwarding_neighbours=neighbours,
-            ),
-            aprs=APRSConfig(
-                enabled=self._aprs_en.isChecked(),
-                is_server=self._is_srv.text(),
-                is_port=self._is_port.value(),
-                is_passcode=self._is_pc.value(),
-                is_filter=self._is_filter.text(),
-            ),
-            alert=AlertConfig(
-                audio_enabled=self._alert_audio_en.isChecked(),
-                visual_only=self._alert_visual_only.isChecked(),
-                alert_interval=self._alert_interval.value(),
-                volume=self._alert_volume.value(),
-                high_contrast=self._alert_high_contrast.isChecked(),
-                large_font=self._alert_large_font.isChecked(),
-                session_sounds=self._session_sounds.isChecked(),
-            ),
-            logging=LoggingConfig(
-                level=self._log_level.currentText(),
-                log_dir=self._log_dir.text(),
-                packet_log=self._pkt_log.isChecked(),
-                vara_cmd_log=self._vara_cmd_log.isChecked(),
-                chat_log=self._chat_log.isChecked(),
-            ),
-            winlink=WinlinkConfig(
-                enabled=self._wl_enabled.isChecked(),
-                gateway_callsign=self._wl_callsign.text().strip().upper(),
-                gateway_password=self._encrypt_secret(
-                    self._wl_password.text(),
-                    self._saved().winlink.gateway_password),
-                grid_square=self._wl_grid.text().strip(),
-                pat_exe_path=self._wl_pat_exe.text().strip(),
-                pat_http_addr=self._wl_pat_addr.text().strip() or "localhost:8080",
-                auto_launch_pat=self._wl_auto_launch.isChecked(),
-                forward_calls=[
-                    c.strip().upper()
-                    for c in self._wl_fwd_calls.text().split(",")
-                    if c.strip()
-                ],
-                cms_timeout=self._wl_cms_timeout.value(),
-            ),
-            outbound_delivery=self._build_outbound_delivery_config(),
-            file_upload=FileUploadConfig(
-                allow_remote_uploads=self._fu_allow_remote.isChecked(),
-                permission_mode=fu_mode,
-                upload_whitelist=fu_whitelist,
-                max_file_bytes=self._fu_max_size.value() * 1024 * 1024,
-                max_files_per_callsign=self._fu_quota.value(),
-                allowed_extensions=fu_exts,
-                blocked_callsigns=fu_blocked,
-                virus_scan_enabled=self._fu_av_enabled.isChecked(),
-                virus_scan_timeout=self._fu_av_timeout.value(),
-                quarantine_infected=self._fu_quarantine.isChecked(),
-                quarantine_dir=self._fu_qdir.text().strip() or "quarantine",
-            ),
-            notifications=NotificationConfig(
-                enabled=self._ntfy_en.isChecked(),
-                ntfy_url=self._ntfy_url.text().strip() or "http://127.0.0.1:8080",
-                topic=self._ntfy_topic.text().strip() or "aether-bbs",
-                priority=self._ntfy_priority.currentText(),
-                cloud_relay=self._ntfy_cloud.isChecked(),
-                cloud_url=self._ntfy_cloud_url.text().strip() or "https://ntfy.sh",
-                pushover_enabled=self._push_en.isChecked(),
-                pushover_api_token=self._push_token.text().strip(),
-                pushover_user_key=self._push_user.text().strip(),
-                pushover_priority=self._push_priority.value(),
-                pushover_sound=self._push_sound.text().strip() or "siren",
-                sms_enabled=self._sms_en.isChecked(),
-                sms_serial_port=self._sms_port.text().strip(),
-                sms_baud_rate=self._sms_baud.value(),
-                sms_phone_numbers=[
-                    n.strip() for n in self._sms_numbers.text().split(",")
-                    if n.strip()
-                ],
-                notify_on_registration=self._notify_registration.isChecked(),
-                notify_on_urgent_bulletin=self._notify_urgent_bulletin.isChecked(),
-                urgent_bulletin_areas=[
-                    a.strip().upper()
-                    for a in self._urgent_areas.text().split(",")
-                    if a.strip()
-                ],
-            ),
-            security=SecurityConfig(
-                operational_mode=(
-                    "open" if self._sec_mode_open.isChecked()
-                    else "emcomm" if self._sec_mode_emcomm.isChecked()
-                    else "restricted"
-                ),
-                require_registration=self._sec_require_registration.isChecked(),
-                require_password=self._sec_require_password.isChecked(),
-                auth_failure_threshold=self._sec_fail_threshold.value(),
-                auth_lockout_minutes=self._sec_lockout_mins.value(),
-                auto_block_threshold=self._sec_auto_block.value(),
-                machine_secret=self._config.security.machine_secret,
-                allow_plaintext_auth=self._sec_allow_plaintext.isChecked(),
-            ),
-            updater=UpdaterConfig(
-                check_on_startup=self._upd_check_startup.isChecked(),
-                auto_check_interval_hours=self._upd_interval.value(),
-                channel=self._upd_channel.currentData() or "release",
-                branch=self._config.updater.branch,
-                repo=self._config.updater.repo,
-                skipped_version=(
-                    "" if self._upd_unskip is not None and self._upd_unskip.isChecked()
-                    else (self._cm.current() or self._config).updater.skipped_version),
-            ),
-            instances=instances,
+        return FileUploadConfig(
+            allow_remote_uploads=self._fu_allow_remote.isChecked(),
+            permission_mode=fu_mode,
+            upload_whitelist=fu_whitelist,
+            max_file_bytes=self._fu_max_size.value() * 1024 * 1024,
+            max_files_per_callsign=self._fu_quota.value(),
+            allowed_extensions=fu_exts,
+            blocked_callsigns=fu_blocked,
+            virus_scan_enabled=self._fu_av_enabled.isChecked(),
+            virus_scan_timeout=self._fu_av_timeout.value(),
+            quarantine_infected=self._fu_quarantine.isChecked(),
+            quarantine_dir=self._fu_qdir.text().strip() or "quarantine",
         )
-        # Keep settings this tab has no widget for (message_dir, routing
-        # overrides, log rotation sizes ...) at their current values
-        from core.config import overlay
-        return overlay(self._cm.current() or self._config, built)
+
+    def _build_notifications(self):
+        """Notifications: ntfy, Pushover, SMS."""
+        return NotificationConfig(
+            enabled=self._ntfy_en.isChecked(),
+            ntfy_url=self._ntfy_url.text().strip() or "http://127.0.0.1:8080",
+            topic=self._ntfy_topic.text().strip() or "aether-bbs",
+            priority=self._ntfy_priority.currentText(),
+            cloud_relay=self._ntfy_cloud.isChecked(),
+            cloud_url=self._ntfy_cloud_url.text().strip() or "https://ntfy.sh",
+            pushover_enabled=self._push_en.isChecked(),
+            pushover_api_token=self._push_token.text().strip(),
+            pushover_user_key=self._push_user.text().strip(),
+            pushover_priority=self._push_priority.value(),
+            pushover_sound=self._push_sound.text().strip() or "siren",
+            sms_enabled=self._sms_en.isChecked(),
+            sms_serial_port=self._sms_port.text().strip(),
+            sms_baud_rate=self._sms_baud.value(),
+            sms_phone_numbers=[
+                n.strip() for n in self._sms_numbers.text().split(",")
+                if n.strip()
+            ],
+            notify_on_registration=self._notify_registration.isChecked(),
+            notify_on_urgent_bulletin=self._notify_urgent_bulletin.isChecked(),
+            urgent_bulletin_areas=[
+                a.strip().upper()
+                for a in self._urgent_areas.text().split(",")
+                if a.strip()
+            ],
+        )
+
+    def _build_security(self):
+        """Security and the operational mode."""
+        from core.config import SecurityConfig
+        return SecurityConfig(
+            operational_mode=(
+                "open" if self._sec_mode_open.isChecked()
+                else "emcomm" if self._sec_mode_emcomm.isChecked()
+                else "restricted"
+            ),
+            require_registration=self._sec_require_registration.isChecked(),
+            require_password=self._sec_require_password.isChecked(),
+            auth_failure_threshold=self._sec_fail_threshold.value(),
+            auth_lockout_minutes=self._sec_lockout_mins.value(),
+            auto_block_threshold=self._sec_auto_block.value(),
+            machine_secret=self._config.security.machine_secret,
+            allow_plaintext_auth=self._sec_allow_plaintext.isChecked(),
+        )
+
+    def _build_updater(self):
+        """About & Updates."""
+        from core.config import UpdaterConfig
+        return UpdaterConfig(
+            check_on_startup=self._upd_check_startup.isChecked(),
+            auto_check_interval_hours=self._upd_interval.value(),
+            channel=self._upd_channel.currentData() or "release",
+            branch=self._config.updater.branch,
+            repo=self._config.updater.repo,
+            skipped_version=(
+                "" if self._upd_unskip is not None and self._upd_unskip.isChecked()
+                else (self._cm.current() or self._config).updater.skipped_version),
+        )

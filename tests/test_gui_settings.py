@@ -272,3 +272,45 @@ def test_an_unchanged_secret_is_saved_unchanged(qapp, tmp_path):
         first.outbound_delivery.inbound_email.password
     assert third.outbound_delivery.inbound_email.decrypt_password(
         third.security.machine_secret) == "new-pw"
+
+
+RICH = Path(__file__).with_name("data") / "rich_settings.toml"
+
+
+def test_saving_an_unedited_form_keeps_every_setting(qapp, tmp_path):
+    """Save rebuilds every section from its widgets; with nothing edited
+    it must give back exactly the saved settings."""
+    cm, tab = _tab(tmp_path, RICH.read_text(encoding="utf-8"))
+    saved = cm.current()
+    built = tab._build_config()
+    for section in type(saved).model_fields:
+        assert getattr(built, section) == getattr(saved, section), section
+
+
+def _built_before_overlay(tab, monkeypatch):
+    """What Save builds from the widgets, before laying it over the saved
+    settings (overlay keeps a field the builder leaves out, so a builder
+    that dropped one would still look right)."""
+    import json
+    import core.config
+    captured = {}
+    real = core.config.overlay
+
+    def capture(base, built):
+        captured.setdefault("built", built)     # the outer call, not its recursion
+        return real(base, built)
+    monkeypatch.setattr(core.config, "overlay", capture)
+    tab._build_config()
+    data = captured["built"].model_dump(exclude_unset=True, mode="json")
+    data.get("security", {}).pop("machine_secret", None)    # random per run
+    return json.loads(json.dumps(data, sort_keys=True))
+
+
+def test_each_section_saves_the_same_fields(qapp, tmp_path, monkeypatch):
+    """Pins every field each section of Save sets, and its value, so
+    splitting the builder up cannot drop or change one."""
+    import json
+    snapshot = Path(__file__).with_name("data") / "rich_settings_built.json"
+    cm, tab = _tab(tmp_path, RICH.read_text(encoding="utf-8"))
+    built = _built_before_overlay(tab, monkeypatch)
+    assert built == json.loads(snapshot.read_text(encoding="utf-8"))

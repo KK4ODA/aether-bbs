@@ -1,0 +1,245 @@
+{
+ "alert": {
+  "alert_interval": 10,
+  "audio_enabled": true,
+  "high_contrast": false,
+  "large_font": false,
+  "session_sounds": true,
+  "visual_only": false,
+  "volume": 0.85
+ },
+ "aprs": {
+  "enabled": true,
+  "is_filter": "r/41/-88/50",
+  "is_passcode": 12345,
+  "is_port": 14580,
+  "is_server": "noam.aprs2.net"
+ },
+ "bbs": {
+  "bulletin_areas": [
+   {
+    "description": "Weather",
+    "enabled": true,
+    "max_age": 7,
+    "name": "WX"
+   },
+   {
+    "description": "Local news",
+    "enabled": false,
+    "max_age": 30,
+    "name": "LOCAL"
+   }
+  ],
+  "forwarding": {
+   "server_bind": "127.0.0.1",
+   "server_enabled": true,
+   "server_port": 7302
+  },
+  "forwarding_neighbours": [
+   {
+    "areas": [
+     "WX",
+     "LOCAL"
+    ],
+    "bbs_callsign": "W2BBB-10",
+    "enabled": true,
+    "host": "10.0.0.2",
+    "instance": "",
+    "interval_minutes": 30,
+    "port": 7301,
+    "via": "TCP"
+   }
+  ],
+  "max_message_age": 45,
+  "max_sessions": 2,
+  "session_timeout": 900,
+  "session_watchdog_timeout": 1800,
+  "show_connect_banner": true,
+  "welcome_message": "Hello from W9BBS"
+ },
+ "file_upload": {
+  "allow_remote_uploads": true,
+  "allowed_extensions": [
+   ".txt",
+   ".pdf",
+   ".doc",
+   ".docx",
+   ".jpg",
+   ".jpeg",
+   ".png",
+   ".gif",
+   ".zip",
+   ".gz",
+   ".csv",
+   ".xlsx",
+   ".mp3",
+   ".wav",
+   ".ics",
+   ".kml",
+   ".gpx",
+   ".rtf"
+  ],
+  "blocked_callsigns": [],
+  "max_file_bytes": 5242880,
+  "max_files_per_callsign": 20,
+  "permission_mode": "role_based",
+  "quarantine_dir": "quarantine",
+  "quarantine_infected": true,
+  "upload_whitelist": [],
+  "virus_scan_enabled": false,
+  "virus_scan_timeout": 30
+ },
+ "instances": [
+  {
+   "aether": {
+    "aprs_beacon": false,
+    "aprs_interval": 60,
+    "bandwidth": 0,
+    "config_file": "",
+    "control_port": 8515,
+    "control_token": "",
+    "monitor": true
+   },
+   "auto_restart": true,
+   "auto_start": false,
+   "bandwidth": 500,
+   "cmd_port": 8300,
+   "data_port": 8301,
+   "default_path": "",
+   "enabled": true,
+   "executable_path": "",
+   "frequency_label": "14.105",
+   "host": "127.0.0.1",
+   "mode": "",
+   "name": "HF",
+   "ptt": {
+    "cm108_device": "",
+    "flrig_host": "127.0.0.1",
+    "flrig_port": 12345,
+    "hamlib_host": "127.0.0.1",
+    "hamlib_port": 4532,
+    "method": "VOX",
+    "omnirig_rig": 1,
+    "port": "",
+    "watchdog_timeout": 90.0
+   },
+   "restart_delay": 10,
+   "rig_control": {
+    "channels": [],
+    "method": "NONE",
+    "mode": "USB",
+    "omnirig_rig": 1
+   },
+   "soundcard": "",
+   "soundmodem": {
+    "auto_launch": false,
+    "exe_path": "",
+    "host": "127.0.0.1",
+    "my_callsign": "",
+    "my_ssid": 0,
+    "port": 8000,
+    "protocol": "AGWPE"
+   },
+   "transport": "VARA_HF"
+  }
+ ],
+ "logging": {
+  "chat_log": false,
+  "level": "INFO",
+  "log_dir": "logs",
+  "packet_log": false,
+  "vara_cmd_log": false
+ },
+ "notifications": {
+  "cloud_relay": false,
+  "cloud_url": "https://ntfy.sh",
+  "enabled": false,
+  "notify_on_registration": true,
+  "notify_on_urgent_bulletin": true,
+  "ntfy_url": "http://127.0.0.1:8080",
+  "priority": "urgent",
+  "pushover_api_token": "",
+  "pushover_enabled": false,
+  "pushover_priority": 1,
+  "pushover_sound": "siren",
+  "pushover_user_key": "",
+  "sms_baud_rate": 9600,
+  "sms_enabled": false,
+  "sms_phone_numbers": [],
+  "sms_serial_port": "",
+  "topic": "aether-bbs",
+  "urgent_bulletin_areas": [
+   "EMCOMM",
+   "WX",
+   "ARES"
+  ]
+ },
+ "outbound_delivery": {
+  "inbound_email": {
+   "allowed_senders": [],
+   "bbs_domain": "",
+   "delete_after_fetch": false,
+   "enabled": false,
+   "folder": "INBOX",
+   "host": "",
+   "max_message_size": 50000,
+   "password": "",
+   "poll_interval": 5,
+   "port": 993,
+   "protocol": "IMAP",
+   "use_ssl": true,
+   "username": ""
+  },
+  "winlink_forward": {
+   "max_calls": 50,
+   "mode": "MANUAL"
+  }
+ },
+ "security": {
+  "allow_plaintext_auth": true,
+  "auth_failure_threshold": 5,
+  "auth_lockout_minutes": 60,
+  "auto_block_threshold": 25,
+  "operational_mode": "emcomm",
+  "require_password": true,
+  "require_registration": true
+ },
+ "station": {
+  "bbs_callsign": "W9BBS-10",
+  "beacon_interval": 20,
+  "beacon_text": "Aether BBS",
+  "grid_square": "EN52",
+  "latitude": 41.5,
+  "longitude": -88.1,
+  "sysop_callsign": "W9OP",
+  "tactical_addresses": [
+   {
+    "advertised": true,
+    "alert_phrase": "EOC traffic",
+    "callsign": "EOC1"
+   }
+  ]
+ },
+ "updater": {
+  "auto_check_interval_hours": 12,
+  "branch": "master",
+  "channel": "latest",
+  "check_on_startup": false,
+  "repo": "KK4ODA/aether-bbs",
+  "skipped_version": ""
+ },
+ "winlink": {
+  "auto_launch_pat": true,
+  "cms_timeout": 120,
+  "enabled": true,
+  "forward_calls": [
+   "W9AAA",
+   "W9CCC"
+  ],
+  "gateway_callsign": "W9BBS",
+  "gateway_password": "",
+  "grid_square": "EN52ab",
+  "pat_exe_path": "/usr/bin/pat",
+  "pat_http_addr": "localhost:8081"
+ }
+}
