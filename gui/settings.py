@@ -309,17 +309,13 @@ class ScanChannelDialog(QDialog):
 
 def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
     """The changed settings, from *old* to *new*, that the running BBS
-    only picks up when it is restarted (one label per area)."""
+    only picks up when it is restarted (one label per area).  Everything
+    else applies on Save."""
     areas = []
-    before = {i.name: i for i in old.instances}
-    for inst in new.instances:
-        was = before.get(inst.name)
-        if was is None:
-            areas.append(f"New modem instance {inst.name}")
-        elif inst.enabled and not was.enabled:
-            areas.append(f"Enabling modem instance {inst.name}")
-        elif inst.ptt != was.ptt or inst.bandwidth != was.bandwidth:
-            areas.append(f"PTT or bandwidth of {inst.name}")
+    lo, ln = old.logging, new.logging
+    if (lo.level, lo.log_dir, lo.max_bytes, lo.backup_count) != \
+            (ln.level, ln.log_dir, ln.max_bytes, ln.backup_count):
+        areas.append("Logging (level, folder, file size)")
     return areas
 
 
@@ -557,7 +553,7 @@ class SettingsTab(QScrollArea):
         loc_note.setStyleSheet("color:#888; font-size:9pt;")
         outer.addWidget(loc_note)
 
-        note = QLabel("⚠ Changing BBS callsign requires a modem restart")
+        note = QLabel("Changing the BBS callsign restarts the modems when you save")
         note.setStyleSheet("color:orange;")
         outer.addWidget(note)
 

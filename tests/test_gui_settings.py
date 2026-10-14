@@ -229,11 +229,12 @@ def test_inbound_email_password_is_encrypted_at_rest(qapp, tmp_path):
 
 
 def test_settings_that_need_a_restart_are_named():
+    """Only the log settings are still read once, at startup: instances,
+    PTT, bandwidth, APRS, forwarding, inbound email and the update
+    interval all apply on Save."""
     from core.config import AppConfig, ForwardingNeighbourConfig, InstanceConfig
     from gui.settings import restart_needed
     old = AppConfig(instances=[InstanceConfig(name="HF", enabled=False)])
-    assert restart_needed(old, old.model_copy(deep=True)) == []
-
     new = old.model_copy(deep=True)
     new.instances[0].enabled = True
     new.instances.append(InstanceConfig(name="VHF", cmd_port=8310, data_port=8311))
@@ -241,11 +242,9 @@ def test_settings_that_need_a_restart_are_named():
     new.bbs.forwarding_neighbours = [ForwardingNeighbourConfig(bbs_callsign="W2BBB")]
     new.updater.auto_check_interval_hours = 6
     new.outbound_delivery.inbound_email.host = "imap.example.org"
-    new.bbs.welcome_message = "hello"              # live: not listed
-    assert restart_needed(old, new) == [
-"Enabling modem instance HF",
-        "New modem instance VHF"]
-
+    assert restart_needed(old, new) == []
+    new.logging.level = "DEBUG"
+    assert restart_needed(old, new) == ["Logging (level, folder, file size)"]
 
 def test_an_unchanged_secret_is_saved_unchanged(qapp, tmp_path):
     """Each Save re-encrypted every secret with a new salt, so it always

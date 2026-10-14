@@ -108,47 +108,93 @@ class ModemInstanceManager:
         self.start_instance(name)
 
     def update_config(self, new_config: AppConfig):
-        """Update config and restart instances whose settings changed."""
+        """Apply saved settings to the running instances: stop instances
+        turned off or removed, restart those whose settings changed and
+        start new or newly enabled ones.  The work runs on one background
+        thread, in that order (a renamed instance frees its ports first)."""
         old_config = self._config
         self._config = new_config
+        wanted = {c.name: c for c in new_config.instances if c.enabled}
+        callsign_changed = (new_config.station.bbs_callsign
+                            != old_config.station.bbs_callsign)
 
-        for inst_cfg in new_config.instances:
-            name = inst_cfg.name
+        to_stop, to_restart, to_start = [], [], []
+        with self._lock:
+            for name in [n for n in self._instances if n not in wanted]:
+                to_stop.append(self._instances.pop(name))
+        for name, inst_cfg in wanted.items():
             status = self._instances.get(name)
-            if not status:
+            if status is None:
                 continue
-            old_cfg = status.cfg
-
-            # Check if rig_control (scan channels) changed
-            rig_changed = (
-                inst_cfg.rig_control != old_cfg.rig_control
-            )
-            # Check if transport/ports/exe changed
-            transport_changed = (
-                inst_cfg.transport != old_cfg.transport
-                or inst_cfg.cmd_port != old_cfg.cmd_port
-                or inst_cfg.data_port != old_cfg.data_port
-                or inst_cfg.executable_path != old_cfg.executable_path
-                or inst_cfg.soundmodem != old_cfg.soundmodem
-                or inst_cfg.aether != old_cfg.aether
-                or inst_cfg.host != old_cfg.host
-            )
-
-            # Update the stored config reference
+            reason = self._restart_reason(status.cfg, inst_cfg, callsign_changed)
             status.cfg = inst_cfg
+            if reason:
+                log.info(f"[{name}] {reason} changed — restarting instance")
+                to_restart.append(name)
+        for name, inst_cfg in wanted.items():
+            if name in self._instances:
+                continue
+            clash = self._port_clash(inst_cfg)
+            if clash:
+                log.error(f"[{name}] not started: port {clash} is used by "
+                          f"another enabled instance")
+                continue
+            status = InstanceStatus(inst_cfg)
+            with self._lock:
+                self._instances[name] = status   # the GUI card finds it now
+            to_start.append(status)
 
-            if rig_changed or transport_changed:
-                log.info(
-                    f"[{name}] Config changed "
-                    f"({'rig_control' if rig_changed else 'transport'}) "
-                    f"— restarting instance"
-                )
-                threading.Thread(
-                    target=self.restart_instance,
-                    args=(name,),
-                    daemon=True,
-                    name=f"InstRestart-{name}",
-                ).start()
+        for status in to_stop:
+            log.info(f"[{status.cfg.name}] turned off or removed in Settings "
+                     f"— stopping it")
+        if to_stop or to_restart or to_start:
+            threading.Thread(
+                target=self._apply_changes, args=(to_stop, to_restart, to_start),
+                daemon=True, name="InstApply").start()
+
+    @staticmethod
+    def _restart_reason(old: InstanceConfig, new: InstanceConfig,
+                        callsign_changed: bool) -> str:
+        """Why *new* needs the instance restarted ('' if it does not)."""
+        if new.rig_control != old.rig_control:
+            return "rig control"
+        if (new.transport != old.transport
+                or new.cmd_port != old.cmd_port
+                or new.data_port != old.data_port
+                or new.executable_path != old.executable_path
+                or new.soundmodem != old.soundmodem
+                or new.aether != old.aether
+                or new.host != old.host):
+            return "transport"
+        if new.is_hf and new.ptt != old.ptt:
+            return "PTT"                     # set up when the broker starts
+        if new.transport.upper() == "VARA_HF" and new.bandwidth != old.bandwidth:
+            return "bandwidth"               # sent to VARA HF at init
+        if callsign_changed and not new.is_soundmodem:
+            return "BBS callsign"            # MYCALL is sent at init
+        if (callsign_changed and new.is_soundmodem
+                and not new.soundmodem.my_callsign):
+            return "BBS callsign"            # registered with AGWPE
+        return ""
+
+    def _port_clash(self, cfg: InstanceConfig) -> Optional[int]:
+        with self._lock:
+            used = {p for s in self._instances.values()
+                    for p in (s.cfg.cmd_port, s.cfg.data_port)}
+        for port in (cfg.cmd_port, cfg.data_port):
+            if port in used:
+                return port
+        return None
+
+    def _apply_changes(self, to_stop, to_restart, to_start):
+        for status in to_stop:
+            self._stop_instance(status)
+        for name in to_restart:
+            self.restart_instance(name)
+        for i, status in enumerate(to_start):
+            if i:
+                time.sleep(STARTUP_STAGGER_SECS)
+            self._start_instance(status)
 
     # ── Access ────────────────────────────────────────────────────────────
 
