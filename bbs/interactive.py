@@ -1030,15 +1030,15 @@ class InteractiveSession:
         self._msgs_recv += 1
 
         # Routing: SW or email → Winlink CMS; plain S → local RF pickup
-        if force_winlink or has_at:
+        from winlink.queue import route_new_message
+        if route_new_message(self._store, mid, dest_call,
+                             force_winlink) == "QUEUED":
             if self._outbound_queue:
-                self._outbound_queue.queue_for_cms(mid)
                 self._send("Message saved and queued for Winlink delivery.\r\n")
             else:
-                self._send("Message saved (Winlink not available — held locally).\r\n")
+                self._send("Message saved; it goes out once Winlink is "
+                           "running.\r\n")
         else:
-            # Local message — mark LOCAL so the auto-router doesn't queue it
-            self._store.set_cms_status(mid, "LOCAL")
             self._send("Message saved (local — held for RF pickup).\r\n")
         self._show_prompt()
 

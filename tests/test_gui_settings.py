@@ -178,3 +178,27 @@ def test_old_smtp_fallback_settings_are_purged_from_disk(tmp_path):
     assert cfg.outbound_delivery.inbound_email.host == "imap.example.org"
     text = path.read_text(encoding="utf-8")
     assert "hunter2" not in text and "smtp" not in text
+
+
+def test_reply_goes_back_the_way_the_message_came(qapp, tmp_path):
+    """A reply to Winlink mail goes through Winlink; a reply to a local RF
+    user waits for RF pickup (it used to be sent to the CMS at the next
+    poll, whoever it was for)."""
+    from bbs.store import MessageStore
+    from core.config import AppConfig
+    from gui.message_viewer import ReplyDialog
+    cfg = AppConfig()
+    cfg.bbs.message_dir = str(tmp_path / "messages")
+    store = MessageStore(cfg)
+    store.initialize()
+    from_cms = store.save_message("W1AW", "KK4ODA", "hi", b"x")
+    store.set_cms_status(from_cms, "RECEIVED")
+    from_rf = store.save_message("N0RF", "KK4ODA", "hi", b"x")
+    routes = {}
+    for mid, sender in ((from_cms, "W1AW"), (from_rf, "N0RF")):
+        dlg = ReplyDialog(store, mid, sender, "KK4ODA", "hi")
+        dlg._body_edit.setPlainText("thanks")
+        dlg.reply_sent.connect(lambda new, s=sender: routes.__setitem__(s, new))
+        dlg._send()
+    assert store.get_message(routes["W1AW"])["cms_status"] == "QUEUED"
+    assert store.get_message(routes["N0RF"])["cms_status"] == "LOCAL"

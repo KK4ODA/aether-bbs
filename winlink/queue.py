@@ -21,16 +21,26 @@ log = logging.getLogger(__name__)
 MAX_CMS_ATTEMPTS = 5
 
 
+def route_new_message(store: MessageStore, mid: str, to_call: str,
+                      via_winlink: bool) -> str:
+    """Set the delivery path of a message the sysop or an RF user just
+    wrote: Winlink (QUEUED) when they chose it or the address is internet
+    email, otherwise held for RF pickup (LOCAL)."""
+    status = (MessageStatus.QUEUED if via_winlink or "@" in to_call
+              else MessageStatus.LOCAL)
+    store.set_cms_status(mid, status)
+    return status
+
+
 class OutboundQueue:
     """
-    Routes outbound messages to the appropriate delivery path and
-    manages CMS delivery status transitions.
+    Manages CMS delivery status transitions for messages queued to Winlink.
 
-    Routing rules:
-    1. Messages with SMTP: addresses (internet email) → CMS
-    2. Messages to non-local callsigns → CMS
-    3. Messages to local callsigns → hold for RF pickup (LOCAL)
-    4. Messages flagged for HF → deferred to forwarding window (future)
+    Only messages explicitly sent to Winlink are queued: the RF ``SW``
+    command, an internet (@) address, or the sysop choosing Winlink when
+    writing or replying in the GUI (see :func:`route_new_message`).  Mail
+    for a station that collects it over RF, received bulletins, inbound
+    email and B2F mail are never sent to the CMS.
     """
 
     def __init__(self, store: MessageStore, local_callsign: str = ""):
@@ -39,46 +49,6 @@ class OutboundQueue:
 
     def set_local_callsign(self, callsign: str):
         self._local_call = callsign.upper().split("-")[0]
-
-    # ── Routing & Queuing ────────────────────────────────────────────────
-
-    def route_message(self, mid: str) -> str:
-        """
-        Evaluate a newly saved message and set its initial CMS status.
-
-        Returns the assigned status (QUEUED or LOCAL).
-        Called after save_message() to determine delivery path.
-        """
-        msg = self._store.get_message(mid)
-        if not msg:
-            log.warning(f"route_message: MID={mid} not found")
-            return MessageStatus.NONE
-
-        to = msg.get("to_call", "").upper()
-
-        # Already has a CMS status? Skip re-routing.
-        existing = msg.get("cms_status", "")
-        if existing and existing != MessageStatus.NONE:
-            return existing
-
-        # Messages with @ are internet email → always CMS
-        if "@" in to:
-            self._store.set_cms_status(mid, MessageStatus.QUEUED)
-            log.info(f"Routed MID={mid} → CMS (SMTP address)")
-            return MessageStatus.QUEUED
-
-        # Messages to the BBS itself → local
-        if to == self._local_call:
-            self._store.set_cms_status(mid, MessageStatus.LOCAL)
-            return MessageStatus.LOCAL
-
-        # Messages to other callsigns → CMS
-        if to:
-            self._store.set_cms_status(mid, MessageStatus.QUEUED)
-            log.info(f"Routed MID={mid} → CMS (non-local callsign {to})")
-            return MessageStatus.QUEUED
-
-        return MessageStatus.NONE
 
     def queue_for_cms(self, mid: str):
         """Explicitly queue a message for CMS delivery."""
@@ -92,31 +62,30 @@ class OutboundQueue:
         Get messages ready for the next CMS poll.
 
         Returns messages with cms_status=QUEUED, sorted by priority
-        then date.  Also picks up any unsent messages that haven't
-        been routed yet (cms_status empty) and routes them on the fly.
+        then date.  Also queues unsent internet-email messages that were
+        never routed (written before routing was explicit): an @ address
+        cannot be collected over RF, so Winlink is its only way out.
         """
-        # First, route any unrouted unsent messages
-        self._route_unrouted()
+        self._queue_unrouted_email()
 
         # Return QUEUED messages
         return self._store.get_cms_queued(limit)
 
-    def _route_unrouted(self):
-        """Find unsent messages with no cms_status and route them."""
+    def _queue_unrouted_email(self):
         try:
             with self._store._lock:
                 cur = self._store._conn.execute(
-                    """SELECT id, from_call, to_call FROM messages
+                    """SELECT id FROM messages
                        WHERE is_sent=0 AND (cms_status='' OR cms_status IS NULL)
+                         AND to_call LIKE '%@%'
                        LIMIT 50""",
                 )
-                unrouted = [dict(r) for r in cur.fetchall()]
+                mids = [r[0] for r in cur.fetchall()]
         except Exception as e:
             log.error(f"Failed to query unrouted messages: {e}")
             return
-
-        for msg in unrouted:
-            self.route_message(msg["id"])
+        for mid in mids:
+            self.queue_for_cms(mid)
 
     # ── Status Transitions ───────────────────────────────────────────────
 

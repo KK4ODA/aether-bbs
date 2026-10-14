@@ -795,6 +795,8 @@ class PatClient:
             to_call = msg.get("to_call", "")
             subject = msg.get("subject", "")
             body = msg.get("body", "")
+            if isinstance(body, bytes):      # stored as a BLOB
+                body = body.decode("utf-8", errors="replace")
 
             self._queue.mark_sending(mid)
 

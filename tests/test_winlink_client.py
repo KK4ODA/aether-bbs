@@ -72,3 +72,49 @@ def test_pat_timeout_is_reported_not_crashed(client, monkeypatch):
     monkeypatch.setattr(pc.subprocess, "run", boom)
     monkeypatch.setattr(c, "_check_internet", lambda *a, **k: True)
     assert c._sync_cms() is False
+
+
+def test_only_mail_sent_to_winlink_is_queued(client, tmp_path):
+    """Every CMS poll used to queue any unsent message to a callsign other
+    than the gateway's, then mark it sent: mail for local RF users,
+    bulletins and inbound email left the BBS and vanished from RF pickup."""
+    from bbs.bulletins import BulletinStore
+    from winlink.queue import route_new_message
+    c, store = client
+    bulletins = BulletinStore(store)
+    for_rf_user = store.save_message("W1AAA", "N0RF", "pick me up", b"x")
+    emailed_in = store.save_message("bob@example.org", "N0RF", "email", b"x",
+                                    area="INBOX", instance="email")
+    bulletin = bulletins.save_bulletin("W1AAA", "ALL", "news", b"x", area="ALL")
+    written_before = store.save_message("N0RF", "bob@example.org", "old", b"x")
+    sw = store.save_message("N0RF", "W1AW", "via winlink", b"x")
+    route_new_message(store, sw, "W1AW", via_winlink=True)
+    local = store.save_message("KK4ODA", "N0RF", "local", b"x")
+    route_new_message(store, local, "N0RF", via_winlink=False)
+
+    queued = {m["id"] for m in c.outbound_queue.get_cms_outbound()}
+    assert queued == {sw, written_before}
+    for mid in (for_rf_user, emailed_in, bulletin, local):
+        assert store.get_message(mid)["cms_status"] in ("", "LOCAL")
+
+
+def test_queued_message_reaches_pat_compose(client, monkeypatch):
+    """Bodies are stored as bytes; pat compose was handed bytes and every
+    queued message failed with an AttributeError."""
+    from winlink.queue import route_new_message
+    c, store = client
+    mid = store.save_message("KK4ODA", "W1AW", "hi", "héllo".encode())
+    route_new_message(store, mid, "W1AW", via_winlink=True)
+    fed = []
+
+    class FakePat:
+        returncode = 0
+        def __init__(self, *a, **k): pass
+        def communicate(self, input=None, timeout=None):
+            fed.append(input)
+            return b"", b""
+    monkeypatch.setattr(pc.subprocess, "Popen", FakePat)
+    c._pat_exe_path = sys.executable                  # any existing file
+    assert c._send_queued_messages() == 1
+    assert fed == ["héllo".encode()]
+    assert store.get_message(mid)["cms_status"] == MessageStatus.SENT

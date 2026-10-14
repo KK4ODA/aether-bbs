@@ -152,3 +152,20 @@ def test_b2f_real_client_banner_gets_its_own_mail(bbs):
     mine = store.save_message("W1AAA", "W1XYZ", "for you", b"your mail")
     out = _b2f(store, "W1XYZ-7", "[RMS Express-1.7-B2FHM$]", [";PR: 0", "FS +"])
     assert any(isinstance(o, str) and mine in o for o in out)    # proposed to W1XYZ
+
+
+def test_s_holds_for_rf_and_sw_queues_for_winlink(bbs):
+    cfg, store, bulletins = bbs
+    u = Session("W1XYZ", cfg, store, bulletins)
+    try:
+        for cmd, to in (("S N0RF", "N0RF"), ("SW W1AW", "W1AW")):
+            u.cmd(cmd)
+            u.cmd("subject")
+            u.cmd("body")
+            u.cmd(".")
+        status = {to: store.get_message(r["id"])["cms_status"]
+                  for to in ("N0RF", "W1AW")
+                  for r in store.list_messages(to_call=to)}
+        assert status == {"N0RF": "LOCAL", "W1AW": "QUEUED"}
+    finally:
+        u.close()
