@@ -388,6 +388,9 @@ class InteractiveSession:
                 self._disconnect()
                 return
             elif cmd in ("REGISTER", "REG"):
+                if self._rate_limited("register", prompt=False):
+                    self._send("> ")
+                    continue
                 if self._access:
                     ref = self._prompt_community_ref()
                     if ref is None:
@@ -477,6 +480,13 @@ class InteractiveSession:
             return True
 
         # Has password — HMAC-SHA256 challenge-response
+        if self._rate_limiter and self._rate_limiter.exhausted(
+                self.remote_call, "auth_failure"):
+            self._send("Too many failed authentication attempts.\r\n"
+                       "Try again later.\r\n")
+            time.sleep(0.5)
+            self._disconnect()
+            return False
         nonce = self._access.generate_challenge(self.remote_call)
         self._send(f";AUTH HMAC-SHA256 {nonce}\r\n")
         self._send("Enter password (or HMAC client will respond automatically):\r\n")
@@ -496,6 +506,7 @@ class InteractiveSession:
         if line is None or not isinstance(line, str) or line is _RF_DISCONNECTED:
             self._send("Authentication timed out.\r\n")
             self._access.record_auth_failure(self.remote_call)
+            self._count_auth_failure()
             self._disconnect()
             return False
 
@@ -508,6 +519,7 @@ class InteractiveSession:
         if not response:
             self._send(";AUTH FAIL\r\n")
             self._access.record_auth_failure(self.remote_call)
+            self._count_auth_failure()
             self._disconnect()
             return False
 
@@ -516,9 +528,38 @@ class InteractiveSession:
             return True
         else:
             self._send(";AUTH FAIL\r\n")
+            self._count_auth_failure()
             time.sleep(0.5)
             self._disconnect()
             return False
+
+    def _count_auth_failure(self):
+        if self._rate_limiter:
+            self._rate_limiter.check(self.remote_call, "auth_failure")
+
+    _RATE_LIMITED_TEXT = {
+        "message_send":  "You have sent too many messages",
+        "bulletin_post": "You have posted too many bulletins",
+        "file_upload":   "You have uploaded too many files",
+        "register":      "Too many registration attempts",
+    }
+
+    def _rate_limited(self, event: str, prompt: bool = True) -> bool:
+        """Count one *event* for this station; when it is over the limit
+        for the operational mode, say so and return True."""
+        if not self._rate_limiter:
+            return False
+        allowed, count = self._rate_limiter.check(self.remote_call, event)
+        if allowed:
+            return False
+        self._send(f"{self._RATE_LIMITED_TEXT.get(event, 'Rate limit exceeded')}"
+                   f". Try again later.\r\n")
+        if self._access:
+            self._access.audit(self.remote_call, "RATE_LIMITED",
+                               f"{event} count={count}", self.instance_name)
+        if prompt:
+            self._show_prompt()
+        return True
 
     # ── Tactical address ─────────────────────────────────────────────────
 
@@ -597,6 +638,8 @@ class InteractiveSession:
 
         # ── REGISTER / SETPASS — always available ────────────────────
         if upper in ("REGISTER", "REG"):
+            if self._rate_limited("register"):
+                return
             if self._access:
                 ref = self._prompt_community_ref()
                 if ref is None:
@@ -652,7 +695,8 @@ class InteractiveSession:
             return
 
         # ── Access control permission check ──────────────────────────
-        if self._access and not self._access.has_permission(self.remote_call, cmd):
+        if self._access and not self._access.has_permission(
+                self.remote_call, cmd, policy=self._policy):
             self._send("Permission denied for this command.\r\n")
             if self._access:
                 self._access.audit(self.remote_call, "COMMAND_DENIED",
@@ -1000,6 +1044,8 @@ class InteractiveSession:
             self._send(usage)
             self._show_prompt()
             return
+        if self._rate_limited("message_send"):
+            return
 
         # Email addresses always go via Winlink regardless of S vs SW
         has_at = "@" in dest_call
@@ -1194,6 +1240,8 @@ class InteractiveSession:
             if all_areas:
                 self._send("Available groups: " + ", ".join(sorted(all_areas)) + "\r\n")
             self._show_prompt()
+            return
+        if self._rate_limited("bulletin_post"):
             return
 
         group_upper = group.upper()
@@ -1907,6 +1955,9 @@ class InteractiveSession:
                 f"file={filename_hint} area={area_hint}"
             )
             self._show_prompt()
+            return
+
+        if self._rate_limited("file_upload"):
             return
 
         mb = self._files._config.file_upload.max_file_bytes // (1024 * 1024)

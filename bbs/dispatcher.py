@@ -394,7 +394,9 @@ class SessionDispatcher:
     ):
         # ── Pre-session security gate ────────────────────────────────
         if self._access:
-            allowed, reason = self._access.check_lockout(remote_call)
+            allowed, reason = self._access.check_lockout(
+                remote_call,
+                self._policy.auto_block_threshold if self._policy else None)
             if not allowed:
                 try:
                     handler.send_text(f"\r\n{reason}\r\n")

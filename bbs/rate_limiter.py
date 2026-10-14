@@ -86,6 +86,15 @@ class RateLimiter:
             q.append(now)
             return True, len(q)
 
+    def exhausted(self, callsign: str, event: str) -> bool:
+        """True when *event* is at its limit for *callsign* (records nothing)."""
+        max_count, window_seconds = RATE_LIMITS.get(event, (100, 3600))
+        effective_max = max(1, int(max_count * self._multiplier))
+        cutoff = time.monotonic() - window_seconds
+        with self._lock:
+            q = self._counters[base_callsign(callsign)][event]
+            return sum(1 for t in q if t >= cutoff) >= effective_max
+
     def reset(self, callsign: str, event: Optional[str] = None):
         """Reset counters for a callsign."""
         base = base_callsign(callsign)
