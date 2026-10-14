@@ -536,10 +536,12 @@ class ModemStatusPanel(QScrollArea):
                 if status:
                     if status.process_state.name in ("RUNNING",):
                         card.on_process_state("RUNNING")
-                    if status.mux is not None:
-                        from vara.interface import VARAFMState
-                        if status.mux.state != VARAFMState.DISCONNECTED:
-                            card.on_tcp_connected(True)
+                    # by name: VARA and AGWPE brokers use different
+                    # state enums (comparing to VARAFMState was always
+                    # "up" for a Soundmodem instance)
+                    if status.mux is not None and status.mux.state.name not in (
+                            "DISCONNECTED", "CONNECTING"):
+                        card.on_tcp_connected(True)
                     if status.current_call:
                         card.on_session_connected(status.current_call)
 
