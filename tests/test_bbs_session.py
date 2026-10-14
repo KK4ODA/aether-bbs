@@ -241,6 +241,24 @@ def test_bulletin_posting_follows_the_mode(bbs, mode, may_post):
         u.close()
 
 
+def test_open_mode_lets_a_new_station_in_without_a_password(bbs):
+    """OPEN auto-approves strangers; with "require password" still ticked
+    it used to approve them and then hang up for want of a password."""
+    from bbs.access import Role
+    cfg, store, bulletins = bbs
+    access, policy, limiter = _secured(cfg, store, "open")
+    cfg.security.require_password = True
+    u = SecuredSession("W1NEW", cfg, store, bulletins, access, policy, limiter)
+    try:
+        text = "".join(u.out)
+        assert "requires a password" not in text
+        assert "Access level: APPROVED" in text
+        assert u.t.is_alive()
+        assert access.get_role("W1NEW") == Role.APPROVED
+    finally:
+        u.close()
+
+
 def test_emcomm_limits_how_many_messages_a_station_sends(bbs):
     """message_send is 20 an hour, a quarter of that in EMCOMM; it was
     never checked."""

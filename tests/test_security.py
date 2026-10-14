@@ -575,8 +575,14 @@ class TestModePolicy(unittest.TestCase):
         self.assertEqual(policy.mode, "open")
         self.assertFalse(policy.require_registration)
         self.assertTrue(policy.auto_approve_on_connect)
+        self.assertFalse(policy.require_password)
         self.assertEqual(policy.min_upload_role, "APPROVED")
         self.assertEqual(policy.rate_limit_multiplier, 2.0)
+
+    def test_open_mode_ignores_password_checkbox(self):
+        config = _make_config(operational_mode="open")
+        config.security.require_password = True
+        self.assertFalse(ModePolicy(config).require_password)
 
     def test_emcomm_mode(self):
         config = _make_config(operational_mode="emcomm")

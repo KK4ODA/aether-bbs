@@ -2696,7 +2696,8 @@ class SettingsTab(QScrollArea):
             "Recommended for most deployments."
         )
         self._sec_mode_open.setToolTip(
-            "Any station that connects is auto-approved.\n"
+            "Any station that connects is auto-approved and needs no password\n"
+            "(callsigns that already have one are still asked for it).\n"
             "Suitable for public-access bulletin boards."
         )
         self._sec_mode_emcomm.setToolTip(
@@ -2739,6 +2740,14 @@ class SettingsTab(QScrollArea):
             "password. Uncheck to require HMAC-SHA256 authentication only."
         )
         af.addRow("", self._sec_allow_plaintext)
+
+        # Open mode needs neither registration nor a password, so those
+        # boxes do nothing there; grey them out rather than mislead.
+        def _open_mode_toggled(is_open: bool):
+            self._sec_require_registration.setEnabled(not is_open)
+            self._sec_require_password.setEnabled(not is_open)
+        self._sec_mode_open.toggled.connect(_open_mode_toggled)
+        _open_mode_toggled(self._sec_mode_open.isChecked())
 
         layout.addWidget(auth_box)
 

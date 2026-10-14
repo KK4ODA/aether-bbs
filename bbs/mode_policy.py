@@ -18,7 +18,7 @@ class ModePolicy:
 
     Supports three modes:
       - restricted: whitelist + approval only (default)
-      - open: anyone can use, auto-approved
+      - open: anyone can use, auto-approved, no password needed
       - emcomm: maximum lockdown
     """
 
@@ -44,6 +44,11 @@ class ModePolicy:
 
     @property
     def require_password(self) -> bool:
+        if self.mode == "open":
+            # Open mode auto-approves strangers, who have no password yet;
+            # requiring one would approve them and then hang up on them.
+            # Callsigns that already have a password are still challenged.
+            return False
         if self.mode == "emcomm":
             return True
         return self._config.security.require_password
