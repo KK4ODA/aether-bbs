@@ -142,6 +142,9 @@ class InteractiveSession:
             self.remote_call == config.station.sysop_callsign.upper()
         )
         self._b2f_handoff = b2f_handoff_fn
+        # Area of the last L / LB, so R/K and RB/KB number the same list
+        self._list_area: Optional[str] = None
+        self._bulletin_area: Optional[str] = None
         self._role = None  # set during access gate in run()
         self._tactical_call: Optional[str] = None  # active tactical address for session
 
@@ -919,11 +922,16 @@ class InteractiveSession:
 
         self._show_prompt()
 
-    def _cmd_list(self, area: Optional[str] = None):
-        msgs = self._store.list_messages(
-            area=area, limit=100,
+    def _listed_messages(self) -> list[dict]:
+        """The messages L shows, in its order; R n and K n index this."""
+        return self._store.list_messages(
+            area=self._list_area, limit=100,
             to_call=None if self._is_sysop else self.remote_call,
         )
+
+    def _cmd_list(self, area: Optional[str] = None):
+        self._list_area = area
+        msgs = self._listed_messages()
         if not msgs:
             self._send("No messages.\r\n")
         else:
@@ -956,7 +964,7 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        msgs = self._store.list_messages(limit=100)
+        msgs = self._listed_messages()
         if idx < 0 or idx >= len(msgs):
             self._send("Message not found.\r\n")
             self._show_prompt()
@@ -1036,14 +1044,15 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        msgs = self._store.list_messages(limit=100)
+        msgs = self._listed_messages()
         if idx < 0 or idx >= len(msgs):
             self._send("Message not found.\r\n")
             self._show_prompt()
             return
 
         msg = msgs[idx]
-        if msg["from_call"].upper() != self.remote_call:
+        mine = self.remote_call in (msg["from_call"].upper(), msg["to_call"].upper())
+        if not (mine or self._is_sysop):
             self._send("You can only delete your own messages.\r\n")
             self._show_prompt()
             return
@@ -1092,6 +1101,7 @@ class InteractiveSession:
     def _cmd_list_bulletins(self, area: Optional[str] = None):
         if self._no_bulletins():
             return
+        self._bulletin_area = area
         bulletins = self._bbs.list_bulletins(area=area, limit=100)
         if not bulletins:
             msg = f"No bulletins" + (f" in area {area}." if area else ".") + "\r\n"
@@ -1130,7 +1140,7 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        bulletins = self._bbs.list_bulletins(limit=100)
+        bulletins = self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
         if idx < 0 or idx >= len(bulletins):
             self._send("Bulletin not found.\r\n")
             self._show_prompt()
@@ -1265,7 +1275,7 @@ class InteractiveSession:
             self._show_prompt()
             return
 
-        bulletins = self._bbs.list_bulletins(limit=100)
+        bulletins = self._bbs.list_bulletins(area=self._bulletin_area, limit=100)
         if idx < 0 or idx >= len(bulletins):
             self._send("Bulletin not found.\r\n")
             self._show_prompt()
