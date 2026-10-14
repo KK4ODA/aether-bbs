@@ -406,10 +406,17 @@ class AccessController:
         stored = f"{salt}:{h}:{enc}"
 
         with self._lock:
+            # Upsert: a station with no access row yet (e.g. the sysop after
+            # a callsign change) was told "Password set" while nothing was
+            # stored.  A new row gets the table's default role, as no row.
             self._conn.execute(
-                """UPDATE access_control SET password_hash=?, updated_at=?
-                   WHERE callsign=?""",
-                (stored, now, base),
+                """INSERT INTO access_control
+                       (callsign, password_hash, created_at, updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(callsign) DO UPDATE SET
+                       password_hash=excluded.password_hash,
+                       updated_at=excluded.updated_at""",
+                (base, stored, now, now),
             )
             self._audit_locked(base, "PASSWORD_SET", "")
             self._conn.commit()
