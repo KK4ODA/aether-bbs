@@ -202,7 +202,8 @@ def test_windows_update_script_runs_setup_after_the_bbs_quits(tmp_path):
     setup = folder / "fake-setup.cmd"
     setup.write_text('@if exist "%~dp0bbs-quit.txt" (echo after>"%~dp0setup-ran.txt")'
                      ' else (echo before>"%~dp0setup-ran.txt")\r\n'
-                     '@echo %*>>"%~dp0setup-ran.txt"\r\n')
+                     '@echo %*>>"%~dp0setup-ran.txt"\r\n'
+                     '@exit /b 0\r\n')                # as a setup that succeeded
     app = folder / "fake-bbs.cmd"
     app.write_text('@echo started > "%~dp0bbs-started.txt"\r\n@exit\r\n')
     subprocess.run([sys.executable, "-c", WINDOWS_BBS, str(setup), str(folder),
