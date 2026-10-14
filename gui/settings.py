@@ -307,6 +307,35 @@ class ScanChannelDialog(QDialog):
         )
 
 
+def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
+    """The changed settings, from *old* to *new*, that the running BBS
+    only picks up when it is restarted (one label per area)."""
+    areas = []
+    od_old, od_new = old.outbound_delivery, new.outbound_delivery
+    if od_old.inbound_email != od_new.inbound_email:
+        areas.append("Inbound email")
+    if od_old.winlink_forward != od_new.winlink_forward:
+        areas.append("Winlink forward list")
+    if (old.bbs.forwarding_neighbours != new.bbs.forwarding_neighbours
+            or old.bbs.forwarding != new.bbs.forwarding):
+        areas.append("Bulletin forwarding (neighbours and server)")
+    if new.aprs.enabled and not old.aprs.enabled:
+        areas.append("APRS (turning it on)")
+    before = {i.name: i for i in old.instances}
+    for inst in new.instances:
+        was = before.get(inst.name)
+        if was is None:
+            areas.append(f"New modem instance {inst.name}")
+        elif inst.enabled and not was.enabled:
+            areas.append(f"Enabling modem instance {inst.name}")
+        elif inst.ptt != was.ptt or inst.bandwidth != was.bandwidth:
+            areas.append(f"PTT or bandwidth of {inst.name}")
+    if (old.updater.auto_check_interval_hours
+            != new.updater.auto_check_interval_hours):
+        areas.append("Update check interval")
+    return areas
+
+
 class SettingsTab(QScrollArea):
     settings_saved = pyqtSignal()
     _update_checked = pyqtSignal(object)   # UpdateCheckResult, from a worker thread
@@ -3258,11 +3287,18 @@ class SettingsTab(QScrollArea):
 
         try:
             cfg = self._build_config()
+            pending = restart_needed(self._cm.current() or self._config, cfg)
             self._cm.save(cfg)
             self._config = cfg
             self._dirty  = False
             self._bus.emit(EventType.CONFIG_CHANGED, data={"config": cfg})
-            QMessageBox.information(self, "Saved", "Settings saved successfully.")
+            if pending:
+                QMessageBox.information(
+                    self, "Saved — restart needed",
+                    "Settings saved. These changes take effect after you "
+                    "restart Aether BBS:\n\n• " + "\n• ".join(pending))
+            else:
+                QMessageBox.information(self, "Saved", "Settings saved successfully.")
             log.info("Settings saved by sysop")
         except Exception as e:
             QMessageBox.critical(self, "Save Failed", str(e))
