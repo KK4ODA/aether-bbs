@@ -95,3 +95,34 @@ def test_session_end_returns_to_listening(link):
     assert _wait(lambda: _of(events, EventType.SESSION_DISCONNECTED))
     assert iface.state == VARAFMState.LISTENING
     assert iface.remote_call is None
+
+
+def test_quiet_command_port_keeps_the_link(monkeypatch):
+    """VARA sends IAMALIVE about once a minute, so the command port is often
+    quiet for longer than the socket's poll timeout.  That must not count as
+    a lost link (it used to drop and re-init the modem every ~35 s)."""
+    import vara.interface as vi
+    monkeypatch.setattr(vi, "SOCKET_POLL_TIMEOUT", 0.5)
+    port = _free_port_pair()
+    sim = VARAFMSimulator(port, port + 1)
+    sim.start()
+    bus = EventBus()
+    lost = []
+    bus.subscribe(EventType.VARA_DISCONNECTED, lost.append)
+    cfg = InstanceConfig(name="Quiet", cmd_port=port, data_port=port + 1,
+                         executable_path="", auto_start=False)
+    iface = VARAFMInterfaceWithCall(cfg, bus, "W1TEST-10")
+    threading.Thread(target=iface.connect, daemon=True).start()
+    try:
+        assert sim.wait_for_client(timeout=5.0)
+        assert sim.wait_for_command("LISTEN") is not None
+        mycalls = len([c for c in sim.get_received_commands() if c.startswith("MYCALL")])
+        time.sleep(3.0)                      # six poll timeouts with no traffic
+        assert lost == []
+        assert iface.state == VARAFMState.LISTENING
+        # no re-init happened either
+        assert len([c for c in sim.get_received_commands()
+                    if c.startswith("MYCALL")]) == mycalls
+    finally:
+        iface.disconnect()
+        sim.stop()
