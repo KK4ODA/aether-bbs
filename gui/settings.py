@@ -392,90 +392,7 @@ class SettingsTab(QScrollArea):
         splitter.setStretchFactor(0, 0)   # sidebar: fixed
         splitter.setStretchFactor(1, 1)   # content: stretches
 
-        # ── Populate pages ────────────────────────────────────────────
-        # Each entry is one of:
-        #   (label, builder, is_child) — a selectable page
-        #   "SECTION NAME"            — a non-selectable section header
-        page_defs = [
-            "STATION",
-            ("Station",            self._station_tab,       False),
-            ("Instances",          self._instances_tab,     False),
-            ("BBS",                self._bbs_tab,           False),
-            "CONTENT",
-            ("Bulletins",          self._bulletins_tab,     False),
-            ("Forwarding",         self._forwarding_tab,    False),
-            ("File Upload",        self._file_upload_tab,   False),
-            "CONNECTIVITY",
-            ("Winlink (Pat)",      self._winlink_tab,       False),
-            ("APRS",               self._aprs_tab,          False),
-            "DELIVERY",
-            ("Outbound Delivery",  self._delivery_tab,      False),
-            ("  SMTP Fallback",    self._smtp_providers_tab,  True),
-            ("  Inbound Email Fallback", self._inbound_email_tab, True),
-            ("  Winlink Fwd Mgr",  self._winlink_forward_tab, True),
-            "SECURITY & OPS",
-            ("Security",           self._security_tab,      False),
-            ("Alerts",             self._alerts_tab,        False),
-            ("Notifications",      self._notifications_tab, False),
-            ("Logging",            self._logging_tab,       False),
-            "ABOUT",
-            ("About & Updates",    self._updater_tab,       False),
-        ]
-
-        page_index = 0
-        _first_header = True
-        for entry in page_defs:
-            if isinstance(entry, str):
-                # Section header with integrated divider line.
-                # Uses a single QLabel with border-top as the divider,
-                # rendered via setItemWidget so the border is reliable.
-                header_item = QListWidgetItem()
-                header_item.setFlags(Qt.ItemFlag.NoItemFlags)
-
-                header_lbl = QLabel(f"  {entry}")
-                if _first_header:
-                    header_lbl.setStyleSheet(
-                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
-                        "letter-spacing:1px; background:transparent;"
-                        "padding: 2px 0 0 0;"
-                    )
-                    # 34px = 12px item padding/margin + 8pt text + internal padding
-                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 34))
-                else:
-                    header_lbl.setStyleSheet(
-                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
-                        "letter-spacing:1px; background:transparent;"
-                        "border-top: 1px solid #4e505a;"
-                        "padding: 6px 0 0 0;"
-                    )
-                    # 46px = 12px item overhead + border + padding + text
-                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 46))
-
-                self._nav.addItem(header_item)
-                self._nav.setItemWidget(header_item, header_lbl)
-                _first_header = False
-                continue
-
-            label, builder, is_child = entry
-            item = QListWidgetItem(label)
-            if is_child:
-                # Indent child items with a smaller font
-                font = item.font()
-                font.setPointSize(max(font.pointSize() - 1, 8))
-                item.setFont(font)
-
-            # Store mapping: item → page index
-            item.setData(Qt.ItemDataRole.UserRole, page_index)
-            self._nav.addItem(item)
-
-            # Wrap each page in a scroll area for consistent behaviour
-            page_widget = builder()
-            page_scroll = QScrollArea()
-            page_scroll.setWidget(page_widget)
-            page_scroll.setWidgetResizable(True)
-            page_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            self._pages.addWidget(page_scroll)
-            page_index += 1
+        self._populate_pages()
 
         # Connect sidebar selection → content page
         self._nav.currentItemChanged.connect(self._on_nav_changed)
@@ -3403,11 +3320,110 @@ class SettingsTab(QScrollArea):
             log.error(f"Settings save failed: {e}")
 
     def _revert(self):
-        cfg = self._cm.reload()
-        self._config = cfg
-        # Simplest revert: rebuild the tab (recreate widgets)
+        """Throw away unsaved edits: reload the saved settings and rebuild
+        every page from them, so the form shows (and the next Save writes)
+        what is on disk."""
+        self._config = self._cm.reload()
+        row = self._nav.currentRow()
+        self._nav.blockSignals(True)
+        self._nav.clear()
+        while self._pages.count():
+            page = self._pages.widget(0)
+            self._pages.removeWidget(page)
+            page.deleteLater()
+        self._populate_pages()
+        self._nav.blockSignals(False)
+        self._nav.setCurrentRow(max(row, 0))
+        self._on_nav_changed(self._nav.currentItem(), None)
+        self._dirty = False
         QMessageBox.information(self, "Reverted",
-            "Settings reverted to last saved state. Please close and reopen settings.")
+            "Settings reverted to the last saved state.")
+
+    def _populate_pages(self):
+        """Build the sidebar and pages from self._config."""
+        # Each entry is one of:
+        #   (label, builder, is_child) — a selectable page
+        #   "SECTION NAME"            — a non-selectable section header
+        page_defs = [
+            "STATION",
+            ("Station",            self._station_tab,       False),
+            ("Instances",          self._instances_tab,     False),
+            ("BBS",                self._bbs_tab,           False),
+            "CONTENT",
+            ("Bulletins",          self._bulletins_tab,     False),
+            ("Forwarding",         self._forwarding_tab,    False),
+            ("File Upload",        self._file_upload_tab,   False),
+            "CONNECTIVITY",
+            ("Winlink (Pat)",      self._winlink_tab,       False),
+            ("APRS",               self._aprs_tab,          False),
+            "DELIVERY",
+            ("Outbound Delivery",  self._delivery_tab,      False),
+            ("  SMTP Fallback",    self._smtp_providers_tab,  True),
+            ("  Inbound Email Fallback", self._inbound_email_tab, True),
+            ("  Winlink Fwd Mgr",  self._winlink_forward_tab, True),
+            "SECURITY & OPS",
+            ("Security",           self._security_tab,      False),
+            ("Alerts",             self._alerts_tab,        False),
+            ("Notifications",      self._notifications_tab, False),
+            ("Logging",            self._logging_tab,       False),
+            "ABOUT",
+            ("About & Updates",    self._updater_tab,       False),
+        ]
+
+        page_index = 0
+        _first_header = True
+        for entry in page_defs:
+            if isinstance(entry, str):
+                # Section header with integrated divider line.
+                # Uses a single QLabel with border-top as the divider,
+                # rendered via setItemWidget so the border is reliable.
+                header_item = QListWidgetItem()
+                header_item.setFlags(Qt.ItemFlag.NoItemFlags)
+
+                header_lbl = QLabel(f"  {entry}")
+                if _first_header:
+                    header_lbl.setStyleSheet(
+                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
+                        "letter-spacing:1px; background:transparent;"
+                        "padding: 2px 0 0 0;"
+                    )
+                    # 34px = 12px item padding/margin + 8pt text + internal padding
+                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 34))
+                else:
+                    header_lbl.setStyleSheet(
+                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
+                        "letter-spacing:1px; background:transparent;"
+                        "border-top: 1px solid #4e505a;"
+                        "padding: 6px 0 0 0;"
+                    )
+                    # 46px = 12px item overhead + border + padding + text
+                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 46))
+
+                self._nav.addItem(header_item)
+                self._nav.setItemWidget(header_item, header_lbl)
+                _first_header = False
+                continue
+
+            label, builder, is_child = entry
+            item = QListWidgetItem(label)
+            if is_child:
+                # Indent child items with a smaller font
+                font = item.font()
+                font.setPointSize(max(font.pointSize() - 1, 8))
+                item.setFont(font)
+
+            # Store mapping: item → page index
+            item.setData(Qt.ItemDataRole.UserRole, page_index)
+            self._nav.addItem(item)
+
+            # Wrap each page in a scroll area for consistent behaviour
+            page_widget = builder()
+            page_scroll = QScrollArea()
+            page_scroll.setWidget(page_widget)
+            page_scroll.setWidgetResizable(True)
+            page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self._pages.addWidget(page_scroll)
+            page_index += 1
 
     def _build_config(self) -> AppConfig:
         from core.config import (StationConfig, BBSConfig, APRSConfig,

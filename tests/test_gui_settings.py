@@ -145,3 +145,22 @@ def test_one_bad_value_does_not_wipe_the_config(tmp_path):
     assert list(tmp_path.glob("aether_bbs.toml.bad.*"))  # original kept
     again = ConfigManager(path).load()                  # and the saved file loads
     assert again.security.machine_secret == "s3cret-abc"
+
+
+def test_revert_puts_the_saved_values_back_in_the_form(qapp, tmp_path, monkeypatch):
+    """Revert used to reload the config but leave the edited widgets, so
+    the next Save wrote the edits anyway."""
+    from gui import settings as settings_mod
+    monkeypatch.setattr(settings_mod.QMessageBox, "information",
+                        lambda *a, **k: None)
+    cm, tab = _tab(tmp_path, '[updater]\nauto_check_interval_hours = 12\n'
+                             '[[instances]]\nname = "HF"\n')
+    pages = tab._pages.count()
+    tab._upd_interval.setValue(99)
+    tab._inst_name.setText("EDITED")
+    tab._revert()
+    assert tab._upd_interval.value() == 12
+    cfg = tab._build_config()
+    assert cfg.updater.auto_check_interval_hours == 12
+    assert cfg.instances[0].name == "HF"
+    assert tab._pages.count() == pages          # rebuilt, not duplicated
