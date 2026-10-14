@@ -76,7 +76,8 @@ delivery.
    | Computer | File | How |
    |---|---|---|
    | Windows 10/11 (64-bit) | `AetherBBS-<version>-windows-setup.exe` | Run it. It installs for you alone, with no administrator prompt, unless you choose all users. |
-   | Mac (Apple silicon) | `AetherBBS-<version>-macos.dmg` | Open it and drag **Aether BBS** into Applications. |
+   | Mac with Apple silicon (M1 and later) | `AetherBBS-<version>-macos.dmg` | Open it and drag **Aether BBS** into Applications. |
+   | Mac with an Intel processor | `AetherBBS-<version>-macos-intel.dmg` | The same. |
    | Linux (x86-64) | `AetherBBS-<version>-linux-x86_64.tar.gz` | Unpack it in a folder you own and run `AetherBBS/AetherBBS`. `AetherBBS/install-desktop-entry.sh` adds it to your application menu. |
 
    No Python is needed. The installers are not code-signed yet, so the first start shows a

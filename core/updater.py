@@ -27,6 +27,7 @@ Works with or without an EventBus (terminal mode passes ``None``).
 import json
 import logging
 import os
+import platform as _platform
 import re
 import shutil
 import subprocess
@@ -137,19 +138,22 @@ def is_newer(candidate: str, current: str) -> bool:
 
 # ── Installer builds ────────────────────────────────────────────────────────
 
-def installer_suffix(platform: Optional[str] = None) -> str:
+def installer_suffix(platform: Optional[str] = None, machine: Optional[str] = None) -> str:
     """The end of this platform's installer file name on a release."""
     platform = platform or sys.platform
     if platform == "win32":
         return "-windows-setup.exe"
     if platform == "darwin":
-        return "-macos.dmg"
+        # "-macos.dmg" is the Apple-silicon build (the name 1.3.2 looks for)
+        machine = (machine or _platform.machine()).lower()
+        return "-macos-intel.dmg" if machine in ("x86_64", "amd64", "i386") else "-macos.dmg"
     return "-linux-x86_64.tar.gz"
 
 
-def installer_asset(rel: "ReleaseInfo", platform: Optional[str] = None):
-    """(name, url) of the release's installer for this platform, or None."""
-    want = f"AetherBBS-{rel.version}{installer_suffix(platform)}"
+def installer_asset(rel: "ReleaseInfo", platform: Optional[str] = None,
+                    machine: Optional[str] = None):
+    """(name, url) of the release's installer for this computer, or None."""
+    want = f"AetherBBS-{rel.version}{installer_suffix(platform, machine)}"
     for name, url in rel.assets.items():
         if name == want:
             return name, url

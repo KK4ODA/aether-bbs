@@ -1,6 +1,7 @@
 name: Installers
 
-# Builds the Windows installer, the macOS disk image and the Linux archive with
+# Builds the Windows installer, the macOS disk images (Apple silicon and Intel)
+# and the Linux archive with
 # PyInstaller, and starts each built app once (--self-test) to catch modules
 # PyInstaller left out.  The Release workflow calls this with the release's
 # tag and attaches the files to it; on a pull request that touches packaging
@@ -39,10 +40,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Windows, os: windows-latest, kind: windows }
-          - { name: macOS,   os: macos-latest,   kind: macos }
+          - { name: Windows,       id: windows,     os: windows-latest, kind: windows }
+          - { name: macOS,         id: macos,       os: macos-latest,   kind: macos }
+          # GitHub's Intel Mac runner, for Macs without Apple silicon
+          - { name: macOS (Intel), id: macos-intel, os: macos-15-intel, kind: macos }
           # the oldest supported Ubuntu, so the build runs on older distributions too
-          - { name: Linux,   os: ubuntu-22.04,   kind: linux }
+          - { name: Linux,         id: linux,       os: ubuntu-22.04,   kind: linux }
     env:
       QT_QPA_PLATFORM: offscreen
       PYTHONIOENCODING: utf-8
@@ -106,7 +109,7 @@ jobs:
           cp -R "dist/Aether BBS.app" dmg/
           ln -s /Applications dmg/Applications
           hdiutil create -volname "Aether BBS" -srcfolder dmg -ov -format UDZO \
-            "out/AetherBBS-${APP_VERSION}-macos.dmg"
+            "out/AetherBBS-${APP_VERSION}-${{ matrix.id }}.dmg"
 
       - name: Package (Linux archive)
         if: matrix.kind == 'linux'
@@ -118,7 +121,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AetherBBS-${{ matrix.kind }}
+          name: AetherBBS-${{ matrix.id }}
           path: out/*
           if-no-files-found: error
 
