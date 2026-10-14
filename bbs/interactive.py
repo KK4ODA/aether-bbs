@@ -142,6 +142,8 @@ class InteractiveSession:
             self.remote_call == config.station.sysop_callsign.upper()
         )
         self._b2f_handoff = b2f_handoff_fn
+        # Set once the RF link is gone: every prompt then ends at once
+        self._link_down = False
         # Area of the last L / LB, so R/K and RB/KB number the same list
         self._list_area: Optional[str] = None
         self._bulletin_area: Optional[str] = None
@@ -327,7 +329,7 @@ class InteractiveSession:
 
             while self._running:
                 line = self._get_line(timeout=timeout)
-                if line is _RF_DISCONNECTED:
+                if self._link_down:
                     log.info(f"[{self.instance_name}] RF disconnected: {self.remote_call}")
                     break  # link is gone — do not attempt to send
                 if line is None:
@@ -489,6 +491,8 @@ class InteractiveSession:
             self._send(f";TRANSPORT {self._transport_label}\r\n")
             line = self._get_line(timeout=120)
 
+        if self._link_down:
+            return False   # the link dropped: not a failed password
         if line is None or not isinstance(line, str) or line is _RF_DISCONNECTED:
             self._send("Authentication timed out.\r\n")
             self._access.record_auth_failure(self.remote_call)
@@ -1011,6 +1015,8 @@ class InteractiveSession:
             if line is None or line.strip() == ".":
                 break
             lines.append(line)
+        if self._link_down:
+            return   # link dropped before the end: don't post half a message
 
         body_text = "\r\n".join(lines)
         from_call = self._tactical_call or self.remote_call
@@ -1226,6 +1232,8 @@ class InteractiveSession:
             if line is None or line.strip() == ".":
                 break
             lines.append(line)
+        if self._link_down:
+            return   # link dropped before the end: don't post half a message
 
         if not lines:
             self._send("No body entered. Bulletin not saved.\r\n")
@@ -1401,6 +1409,7 @@ class InteractiveSession:
                     continue
 
                 if line is _RF_DISCONNECTED:
+                    self._link_lost()
                     return
 
                 if line is None:
@@ -1557,12 +1566,13 @@ class InteractiveSession:
                 line = None
 
             if line is _RF_DISCONNECTED:
+                self._link_lost()
                 self._bus.emit(
                     EventType.CHAT_ENDED,
                     source=self.instance_name,
                     data={"remote_call": self.remote_call, "reason": "rf_disconnect"},
                 )
-                return  # outer session loop will handle RF cleanup
+                return
 
             if line is _SYSOP_CHAT_END:
                 self._send(
@@ -1659,8 +1669,15 @@ class InteractiveSession:
         if to_call == self.remote_call:
             self._pending_notify.set()
 
+    def _link_lost(self):
+        """The RF link dropped: end the session wherever it is."""
+        self._link_down = True
+        self._running = False
+
     def _get_line(self, timeout: float = 60):
-        """Return next line, _RF_DISCONNECTED on RF disconnect, or None on timeout.
+        """Return the next line, or None on timeout or once the RF link is
+        down (then self._link_down is set).  Any prompt reading through here
+        ends as soon as the link drops instead of waiting out its timeout.
         Polls every 2 seconds so mid-session notifications can be pushed
         immediately rather than waiting for the next command.
 
@@ -1689,10 +1706,15 @@ class InteractiveSession:
         deadline       = (time.monotonic() + timeout) if timeout is not None else None
         last_keepalive = time.monotonic()
 
+        if self._link_down:
+            return None
         while deadline is None or time.monotonic() < deadline:
             try:
                 val = self._rx_queue.get(timeout=POLL)
-                return val  # may be _RF_DISCONNECTED sentinel
+                if val is _RF_DISCONNECTED:
+                    self._link_lost()
+                    return None
+                return val
             except queue.Empty:
                 now = time.monotonic()
 

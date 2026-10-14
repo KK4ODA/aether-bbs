@@ -97,3 +97,29 @@ def test_bulletin_numbers_follow_the_area_listed(bbs):
         assert "WX BODY" in u.cmd("RB 1")
     finally:
         u.close()
+
+
+def test_link_drop_in_a_nested_prompt_ends_the_session_at_once(bbs):
+    """A drop while the user is typing a message used to leave the session
+    (and the BBS's only session slot) waiting out the 10-minute timeout,
+    or crash it on the disconnect marker."""
+    cfg, store, bulletins = bbs
+    u = Session("W1XYZ", cfg, store, bulletins)
+    u.cmd("S W1AAA")
+    u.cmd("Subject line")
+    u.cmd("first line of the body")
+    u.s.feed_line(None)                      # RF link drops mid-message
+    u.t.join(timeout=5)
+    assert not u.t.is_alive()
+    assert store.list_messages(to_call="W1AAA") == []   # nothing half-saved
+
+
+def test_link_drop_during_chat_ends_the_session(bbs):
+    cfg, store, bulletins = bbs
+    from bbs.interactive import _SYSOP_CHAT_INITIATE
+    u = Session("W1XYZ", cfg, store, bulletins)
+    u.s._rx_queue.put(_SYSOP_CHAT_INITIATE)      # the sysop opens a chat
+    time.sleep(0.5)
+    u.s.feed_line(None)                          # RF link drops during it
+    u.t.join(timeout=8)
+    assert not u.t.is_alive()
