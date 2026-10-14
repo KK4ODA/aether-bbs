@@ -23,13 +23,18 @@ class InboundEmailConfig(BaseModel):
     port:                int        = Field(default=993, ge=1, le=65535)
     use_ssl:             bool       = True
     username:            str        = ""
-    password:            str        = ""
+    password:            str        = ""       # encrypted at rest (ENC: prefix)
     folder:              str        = "INBOX"
     bbs_domain:          str        = ""       # e.g. "aetherbbs.example.com"
     poll_interval:       int        = Field(default=5, ge=1, le=1440)  # minutes
     delete_after_fetch:  bool       = False
     max_message_size:    int        = Field(default=50000, ge=1000, le=500000)
     allowed_senders:     list[str]  = Field(default_factory=list)
+
+    def decrypt_password(self, machine_secret: str) -> str:
+        """The plaintext mailbox password (stored encrypted, ENC: prefix)."""
+        from core.crypto import decrypt_value
+        return decrypt_value(self.password, machine_secret)
 
 
 class WinlinkForwardConfig(BaseModel):

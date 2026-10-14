@@ -752,6 +752,15 @@ class ConfigManager:
             changed = True
             log.info("Encrypted Winlink gateway_password at rest")
 
+        # Encrypt the inbound email (IMAP/POP3) password at rest
+        ie = (data.get("outbound_delivery") or {}).get("inbound_email") or {}
+        ie_pw = ie.get("password", "")
+        if ie_pw and not ie_pw.startswith(ENC_PREFIX) and machine:
+            ie["password"] = encrypt_value(ie_pw, machine)
+            cfg = AppConfig.model_validate(data)
+            changed = True
+            log.info("Encrypted inbound email password at rest")
+
         # Encrypt Aether HF control tokens at rest
         if machine:
             for inst in data.get("instances", []):

@@ -116,7 +116,8 @@ class InboundEmailTab:
         self.widgets["username"].setPlaceholderText("bbs@yourdomain.com")
         cf.addRow("Username:", self.widgets["username"])
 
-        self.widgets["password"] = QLineEdit(ie.password)
+        self.widgets["password"] = QLineEdit(
+            ie.decrypt_password(self._config.security.machine_secret))
         self.widgets["password"].setEchoMode(QLineEdit.EchoMode.Password)
         cf.addRow("Password:", self.widgets["password"])
 

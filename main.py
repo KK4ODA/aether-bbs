@@ -180,7 +180,7 @@ class BBSApplication:
             port=ie_cfg.port,
             use_ssl=ie_cfg.use_ssl,
             username=ie_cfg.username,
-            password=ie_cfg.password,
+            password=ie_cfg.decrypt_password(self.config.security.machine_secret),
             folder=ie_cfg.folder,
             bbs_domain=ie_cfg.bbs_domain,
             poll_interval=ie_cfg.poll_interval,

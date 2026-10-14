@@ -2925,7 +2925,7 @@ class SettingsTab(QScrollArea):
         return ae
 
     def _encrypt_winlink_password(self, plaintext: str) -> str:
-        """Encrypt a Winlink password for storage in the config file."""
+        """Encrypt a password or token for storage in the config file."""
         from core.crypto import encrypt_value
         machine = self._config.security.machine_secret
         return encrypt_value(plaintext, machine)
@@ -3126,7 +3126,8 @@ class SettingsTab(QScrollArea):
                 port=ie_vals.get("port", 993),
                 use_ssl=ie_vals.get("use_ssl", True),
                 username=ie_vals.get("username", ""),
-                password=ie_vals.get("password", ""),
+                password=self._encrypt_winlink_password(
+                    ie_vals.get("password", "")),
                 folder=ie_vals.get("folder", "INBOX"),
                 bbs_domain=ie_vals.get("bbs_domain", ""),
                 poll_interval=ie_vals.get("poll_interval", 5),

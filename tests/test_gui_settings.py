@@ -202,3 +202,27 @@ def test_reply_goes_back_the_way_the_message_came(qapp, tmp_path):
         dlg._send()
     assert store.get_message(routes["W1AW"])["cms_status"] == "QUEUED"
     assert store.get_message(routes["N0RF"])["cms_status"] == "LOCAL"
+
+
+def test_inbound_email_password_is_encrypted_at_rest(qapp, tmp_path):
+    from core.config import ConfigManager
+    from core.events import EventBus
+    from gui.settings import SettingsTab
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text('[outbound_delivery.inbound_email]\nusername = "bbs"\n'
+                    'password = "imap-secret"\n', encoding="utf-8")
+    cm = ConfigManager(path)
+    cfg = cm.load()
+    assert "imap-secret" not in path.read_text(encoding="utf-8")
+    ie = cfg.outbound_delivery.inbound_email
+    assert ie.password.startswith("ENC:")
+    assert ie.decrypt_password(cfg.security.machine_secret) == "imap-secret"
+
+    tab = SettingsTab(cm, cfg, EventBus())
+    assert tab._ie_tab.widgets["password"].text() == "imap-secret"
+    tab._ie_tab.widgets["password"].setText("new-secret")
+    saved = tab._build_config()
+    cm.save(saved)
+    assert "new-secret" not in path.read_text(encoding="utf-8")
+    assert saved.outbound_delivery.inbound_email.decrypt_password(
+        saved.security.machine_secret) == "new-secret"
