@@ -102,7 +102,6 @@ def test_enabling_inbound_email_on_save_starts_polling(tmp_path):
     store.initialize()
     app = main.BBSApplication.__new__(main.BBSApplication)
     app._inbound_applied = None
-    app.forward_manager = inbound.WinlinkForwardManager()
     app.inbound_email = InboundEmailPoller(store, EventBus())
     app._apply_internet_email(cfg)
     app.inbound_email.start()                       # as at startup: off
@@ -111,12 +110,10 @@ def test_enabling_inbound_email_on_save_starts_polling(tmp_path):
     on = cfg.model_copy(deep=True)
     on.outbound_delivery.inbound_email.enabled = True
     on.outbound_delivery.inbound_email.host = "imap.example.org"
-    on.winlink.forward_calls = ["W1AW"]
     app._on_config_changed_email(SimpleNamespace(data={"config": on}))
     try:
         assert app.inbound_email._enabled and app.inbound_email._timer is not None
         assert app.inbound_email._host == "imap.example.org"
-        assert app.forward_manager._manual_calls == ["W1AW"]
         timer = app.inbound_email._timer
         app._on_config_changed_email(SimpleNamespace(data={"config": on}))
         assert app.inbound_email._timer is timer     # unchanged: timer kept

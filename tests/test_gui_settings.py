@@ -314,3 +314,15 @@ def test_each_section_saves_the_same_fields(qapp, tmp_path, monkeypatch):
     cm, tab = _tab(tmp_path, RICH.read_text(encoding="utf-8"))
     built = _built_before_overlay(tab, monkeypatch)
     assert built == json.loads(snapshot.read_text(encoding="utf-8"))
+
+
+def test_the_winlink_forward_list_page_is_gone_and_old_settings_load(qapp, tmp_path):
+    """Winlink Fwd Mgr never had any effect (nothing built its list) and is
+    removed; a settings file that still has its section loads as before."""
+    cm, tab = _tab(tmp_path, (
+        '[outbound_delivery.winlink_forward]\nmode = "AUTO_ALL"\nmax_calls = 20\n'
+        '[outbound_delivery.inbound_email]\nhost = "imap.example.org"\n'))
+    assert cm.current().outbound_delivery.inbound_email.host == "imap.example.org"
+    labels = [tab._nav.item(i).text() for i in range(tab._nav.count())]
+    assert not any("Fwd" in label for label in labels)
+    assert "Inbound Email" in labels

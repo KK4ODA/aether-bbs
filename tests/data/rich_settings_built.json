@@ -189,10 +189,6 @@
    "protocol": "IMAP",
    "use_ssl": true,
    "username": ""
-  },
-  "winlink_forward": {
-   "max_calls": 50,
-   "mode": "MANUAL"
   }
  },
  "security": {

@@ -8,12 +8,10 @@ Internet email for RF users:
 
 from delivery.inbound import (
     InboundEmailPoller,
-    WinlinkForwardManager,
     extract_callsign_from_email,
 )
 
 __all__ = [
     "InboundEmailPoller",
-    "WinlinkForwardManager",
     "extract_callsign_from_email",
 ]

@@ -37,22 +37,9 @@ class InboundEmailConfig(BaseModel):
         return decrypt_value(self.password, machine_secret)
 
 
-class WinlinkForwardConfig(BaseModel):
-    """
-    Winlink ;FW (forward-for) list management.
-
-    Controls which callsigns the BBS requests mail for when polling
-    the CMS.  AUTO modes dynamically build the list from registered users.
-    """
-    mode:       str = Field(default="MANUAL",
-                            pattern="^(MANUAL|AUTO_APPROVED|AUTO_ALL)$")
-    max_calls:  int = Field(default=50, ge=1, le=50)
-
-
 class OutboundDeliveryConfig(BaseModel):
     """
     Internet email settings, stored under ``[outbound_delivery]`` (the name
     of the SMTP fallback they used to share the section with).
     """
     inbound_email:    InboundEmailConfig    = Field(default_factory=InboundEmailConfig)
-    winlink_forward:  WinlinkForwardConfig  = Field(default_factory=WinlinkForwardConfig)

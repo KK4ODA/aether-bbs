@@ -594,23 +594,6 @@ class MessageStore:
             self._conn.commit()
         log.info(f"Winlink registration for {call}: {'ON' if registered else 'OFF'}")
 
-    def get_winlink_registered_calls(self) -> list[dict]:
-        """Return all callsigns opted in to Winlink forwarding with passwords.
-
-        Returns list of {"callsign": str, "password": str}.
-        Passwords are decrypted from their at-rest encrypted form.
-        """
-        from core.crypto import decrypt_value
-        machine = self._config.security.machine_secret or ""
-        with self._lock:
-            cur = self._conn.execute(
-                "SELECT callsign, winlink_password FROM user_prefs "
-                "WHERE winlink_registered=1"
-            )
-            return [{"callsign": row["callsign"],
-                     "password": decrypt_value(row["winlink_password"], machine)}
-                    for row in cur.fetchall()]
-
     def message_count(self) -> int:
         with self._lock:
             cur = self._conn.execute("SELECT COUNT(*) FROM messages")

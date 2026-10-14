@@ -3022,10 +3022,6 @@ class SettingsTab(QScrollArea):
         self._ie_tab = InboundEmailTab(self._config)
         return self._ie_tab.build()
 
-    def _winlink_forward_tab(self) -> QWidget:
-        from gui.delivery_tabs import WinlinkForwardTab
-        self._wf_tab = WinlinkForwardTab(self._config)
-        return self._wf_tab.build()
 
     # ── APRS settings ─────────────────────────────────────────────────────
 
@@ -3130,18 +3126,13 @@ class SettingsTab(QScrollArea):
 
     def _build_outbound_delivery_config(self):
         from delivery.config import (
-            OutboundDeliveryConfig, InboundEmailConfig, WinlinkForwardConfig,
+            OutboundDeliveryConfig, InboundEmailConfig,
         )
 
         # Get inbound email config
         ie_vals = {}
         if hasattr(self, "_ie_tab"):
             ie_vals = self._ie_tab.get_config_values()
-
-        # Get winlink forward config
-        wf_vals = {}
-        if hasattr(self, "_wf_tab"):
-            wf_vals = self._wf_tab.get_config_values()
 
         return OutboundDeliveryConfig(
             inbound_email=InboundEmailConfig(
@@ -3160,10 +3151,6 @@ class SettingsTab(QScrollArea):
                 delete_after_fetch=ie_vals.get("delete_after_fetch", False),
                 max_message_size=ie_vals.get("max_message_size", 50000),
                 allowed_senders=ie_vals.get("allowed_senders", []),
-            ),
-            winlink_forward=WinlinkForwardConfig(
-                mode=wf_vals.get("mode", "MANUAL"),
-                max_calls=wf_vals.get("max_calls", 50),
             ),
         )
 
@@ -3340,7 +3327,6 @@ class SettingsTab(QScrollArea):
             ("APRS",               self._aprs_tab,          False),
             "INTERNET EMAIL",
             ("Inbound Email",      self._inbound_email_tab, False),
-            ("Winlink Fwd Mgr",    self._winlink_forward_tab, False),
             "SECURITY & OPS",
             ("Security",           self._security_tab,      False),
             ("Alerts",             self._alerts_tab,        False),
