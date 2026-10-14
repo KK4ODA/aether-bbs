@@ -322,6 +322,7 @@ def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
 class SettingsTab(QScrollArea):
     settings_saved = pyqtSignal()
     _update_checked = pyqtSignal(object)   # UpdateCheckResult, from a worker thread
+    _audio_test_failed = pyqtSignal(str)   # error text, from the TTS test thread
 
     def __init__(self, cm: ConfigManager, config: AppConfig, bus: EventBus,
                  notifiers=None, parent=None):
@@ -332,6 +333,7 @@ class SettingsTab(QScrollArea):
         self._dirty  = False
         self._notifiers = notifiers or {}
         self._update_checked.connect(self._on_check_result)
+        self._audio_test_failed.connect(self._on_audio_test_failed)
 
         container = QWidget()
         outer     = QVBoxLayout(container)
@@ -2217,8 +2219,9 @@ class SettingsTab(QScrollArea):
         audio_form.addRow("", test_btn)
 
         audio_note = QLabel(
-            "Requires pyttsx3 (pip install pyttsx3) or platform TTS "
-            "(PowerShell/say/espeak). Falls back to silent if none available."
+            "Uses the computer's own text-to-speech: Windows speech, "
+            "macOS 'say', or espeak on Linux. Nothing extra to install "
+            "on Windows or macOS."
         )
         audio_note.setWordWrap(True)
         audio_note.setStyleSheet("color:#888; font-size:9pt;")
@@ -2264,13 +2267,9 @@ class SettingsTab(QScrollArea):
         self._session_sounds.setEnabled(checked)
 
     def _test_alert_audio(self):
-        """One-shot TTS test using a detached subprocess.
-
-        Never uses pyttsx3/SAPI5 directly - calling runAndWait() from
-        a background thread crashes the process on Windows due to COM
-        apartment mismatches with Qt. A subprocess is fully isolated.
-        """
-        import sys, subprocess, threading
+        """One-shot TTS test on a worker thread; reports any failure."""
+        import threading
+        from gui.message_viewer import speak
 
         if self._alert_visual_only.isChecked() or not self._alert_audio_en.isChecked():
             from PyQt6.QtWidgets import QMessageBox
@@ -2281,37 +2280,23 @@ class SettingsTab(QScrollArea):
             )
             return
 
-        volume = int(self._alert_volume.value() * 100)
-        phrase = "Test alert. Audio is working."
+        volume = self._alert_volume.value()
 
         def _run():
-            try:
-                if sys.platform == "win32":
-                    script = (
-                        "Add-Type -AssemblyName System.Speech; "
-                        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                        f"$s.Volume = {volume}; "
-                        f"$s.Speak('{phrase}');"
-                    )
-                    subprocess.run(
-                        ["powershell", "-NoProfile", "-NonInteractive",
-                         "-Command", script],
-                        timeout=20,
-                        capture_output=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                elif sys.platform == "darwin":
-                    subprocess.run(["say", phrase],
-                                   timeout=15, capture_output=True)
-                else:
-                    subprocess.run(["espeak", "-s", "140", phrase],
-                                   timeout=15, capture_output=True)
-            except FileNotFoundError:
-                log.warning("TTS binary not found (powershell / say / espeak)")
-            except Exception as exc:
-                log.warning(f"Test audio error: {exc}")
+            error = speak("Test alert. Audio is working.", volume)
+            if error:
+                log.warning(f"Test audio error: {error}")
+                self._audio_test_failed.emit(error)
 
         threading.Thread(target=_run, daemon=True, name="TTS-Test").start()
+
+    @pyqtSlot(str)
+    def _on_audio_test_failed(self, error: str):
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            self, "Audio Test",
+            f"The test announcement could not be spoken:\n\n{error}"
+        )
 
 
     # ── File Upload security settings ────────────────────────────────────────

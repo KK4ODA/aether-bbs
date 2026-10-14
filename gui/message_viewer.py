@@ -684,9 +684,8 @@ class AudioAlertThread(threading.Thread):
     """
     Background thread that repeats a TTS spoken alert at a configurable interval.
 
-    Uses pyttsx3 if available; falls back to platform-native TTS via subprocess
-    (PowerShell on Windows, 'say' on macOS, espeak on Linux); falls back silently
-    to no audio if none of the above are available.
+    Speaks with the platform's own TTS (see speak()); stays silent if none
+    is available.
 
     Thread is stopped by calling .stop().  It is daemon so it dies with the process.
     """
@@ -711,72 +710,81 @@ class AudioAlertThread(threading.Thread):
         self._stop_evt.set()
 
     def _speak(self):
-        """
-        Speak the alert phrase using the best available TTS method.
-
-        Windows — always uses a detached PowerShell subprocess.
-        Using pyttsx3 / SAPI5 directly from a background thread causes a
-        hard C-level crash because SAPI5's runAndWait() pumps the Windows
-        message queue in a way that is incompatible with Qt's event loop
-        when called from a non-COM-initialised thread.  A subprocess is
-        fully isolated from the Python process and avoids this entirely.
-
-        macOS  — 'say' command via subprocess.
-        Linux  — 'espeak' via subprocess.
-        All    — pyttsx3 attempted only on non-Windows as a convenience
-                 fallback if the system TTS binary is absent.
-        """
         if self._stop_evt.is_set():
             return
+        error = speak(self._phrase, self._config.volume)
+        if error:
+            log.debug(f"TTS error: {error}")
 
-        import subprocess, sys
 
-        phrase = self._phrase.replace("'", "").replace('"', "")
-        volume = int(self._config.volume * 100)
+def speak(phrase: str, volume: float) -> str | None:
+    """
+    Speak *phrase* aloud; blocks until done.  Returns None when it was
+    spoken, else a short description of what went wrong.
 
-        try:
-            if sys.platform == "win32":
-                script = (
-                    f"Add-Type -AssemblyName System.Speech; "
-                    f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                    f"$s.Volume = {volume}; "
-                    f"$s.Speak('{phrase}');"
-                )
-                subprocess.run(
-                    ["powershell", "-NoProfile", "-NonInteractive",
-                     "-Command", script],
-                    timeout=20,
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-                return
-            elif sys.platform == "darwin":
-                subprocess.run(["say", phrase], timeout=15,
-                               capture_output=True)
-                return
-            else:
-                subprocess.run(["espeak", "-s", "140", phrase],
-                               timeout=15, capture_output=True)
-                return
-        except FileNotFoundError:
-            pass   # fall through to pyttsx3
-        except Exception as e:
-            log.debug(f"Subprocess TTS error: {e}")
-            return
+    Windows — Windows PowerShell's System.Speech, in a subprocess.
+    Using pyttsx3 / SAPI5 directly from a background thread causes a
+    hard C-level crash because SAPI5's runAndWait() pumps the Windows
+    message queue in a way that is incompatible with Qt's event loop
+    when called from a non-COM-initialised thread.  A subprocess is
+    fully isolated from the Python process and avoids this entirely.
 
-        # Last-resort: pyttsx3 (non-Windows only — safe on Linux/macOS threads)
-        try:
-            import pyttsx3
-            engine = pyttsx3.init()
-            engine.setProperty("rate", 150)
-            engine.setProperty("volume", float(self._config.volume))
-            engine.say(self._phrase)
-            engine.runAndWait()
-            engine.stop()
-        except ImportError:
-            log.debug("pyttsx3 not installed and no system TTS binary found")
-        except Exception as e:
-            log.debug(f"pyttsx3 TTS error: {e}")
+    macOS  — 'say' command via subprocess.
+    Linux  — 'espeak' via subprocess, else pyttsx3 if it is installed.
+    """
+    import os, subprocess, sys
+
+    clean = phrase.replace("'", "").replace('"', "")
+    try:
+        if sys.platform == "win32":
+            # Full path: a PATH without System32's PowerShell folder (or
+            # with PowerShell 7's pwsh only) must not silence alerts.
+            ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                              "System32", "WindowsPowerShell", "v1.0",
+                              "powershell.exe")
+            if not os.path.exists(ps):
+                ps = "powershell"
+            script = (
+                "$ErrorActionPreference = 'Stop'; "
+                "Add-Type -AssemblyName System.Speech; "
+                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                f"$s.Volume = {int(volume * 100)}; "
+                f"$s.Speak('{clean}');"
+            )
+            cmd = [ps, "-NoProfile", "-NonInteractive", "-Command", script]
+            extra = {"creationflags": subprocess.CREATE_NO_WINDOW}
+        elif sys.platform == "darwin":
+            cmd, extra = ["say", clean], {}
+        else:
+            cmd, extra = ["espeak", "-s", "140", clean], {}
+        r = subprocess.run(cmd, timeout=20, capture_output=True, **extra)
+        if r.returncode == 0:
+            return None
+        detail = (r.stderr or r.stdout).decode(errors="replace").strip()
+        return (detail.splitlines() or [f"exit code {r.returncode}"])[0]
+    except FileNotFoundError:
+        if sys.platform == "win32":
+            return "Windows PowerShell was not found"
+    except subprocess.TimeoutExpired:
+        return "speech did not finish within 20 seconds"
+    except Exception as e:
+        return str(e)
+
+    # Last resort on Linux/macOS (safe off the main thread there).
+    try:
+        import pyttsx3
+        engine = pyttsx3.init()
+        engine.setProperty("rate", 150)
+        engine.setProperty("volume", float(volume))
+        engine.say(phrase)
+        engine.runAndWait()
+        engine.stop()
+        return None
+    except ImportError:
+        return ("no text-to-speech program found; install espeak "
+                "(or pip install pyttsx3)")
+    except Exception as e:
+        return str(e)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
