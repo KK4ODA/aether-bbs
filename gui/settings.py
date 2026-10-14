@@ -307,19 +307,47 @@ class ScanChannelDialog(QDialog):
         )
 
 
+def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
+    """The changed settings, from *old* to *new*, that the running BBS
+    only picks up when it is restarted (one label per area)."""
+    areas = []
+    od_old, od_new = old.outbound_delivery, new.outbound_delivery
+    if od_old.inbound_email != od_new.inbound_email:
+        areas.append("Inbound email")
+    if od_old.winlink_forward != od_new.winlink_forward:
+        areas.append("Winlink forward list")
+    if (old.bbs.forwarding_neighbours != new.bbs.forwarding_neighbours
+            or old.bbs.forwarding != new.bbs.forwarding):
+        areas.append("Bulletin forwarding (neighbours and server)")
+    if new.aprs.enabled and not old.aprs.enabled:
+        areas.append("APRS (turning it on)")
+    before = {i.name: i for i in old.instances}
+    for inst in new.instances:
+        was = before.get(inst.name)
+        if was is None:
+            areas.append(f"New modem instance {inst.name}")
+        elif inst.enabled and not was.enabled:
+            areas.append(f"Enabling modem instance {inst.name}")
+        elif inst.ptt != was.ptt or inst.bandwidth != was.bandwidth:
+            areas.append(f"PTT or bandwidth of {inst.name}")
+    if (old.updater.auto_check_interval_hours
+            != new.updater.auto_check_interval_hours):
+        areas.append("Update check interval")
+    return areas
+
+
 class SettingsTab(QScrollArea):
     settings_saved = pyqtSignal()
     _update_checked = pyqtSignal(object)   # UpdateCheckResult, from a worker thread
 
     def __init__(self, cm: ConfigManager, config: AppConfig, bus: EventBus,
-                 notifiers=None, delivery_engine=None, parent=None):
+                 notifiers=None, parent=None):
         super().__init__(parent)
         self._cm     = cm
         self._config = config
         self._bus    = bus
         self._dirty  = False
         self._notifiers = notifiers or {}
-        self._delivery_engine = delivery_engine
         self._update_checked.connect(self._on_check_result)
 
         container = QWidget()
@@ -392,90 +420,7 @@ class SettingsTab(QScrollArea):
         splitter.setStretchFactor(0, 0)   # sidebar: fixed
         splitter.setStretchFactor(1, 1)   # content: stretches
 
-        # ── Populate pages ────────────────────────────────────────────
-        # Each entry is one of:
-        #   (label, builder, is_child) — a selectable page
-        #   "SECTION NAME"            — a non-selectable section header
-        page_defs = [
-            "STATION",
-            ("Station",            self._station_tab,       False),
-            ("Instances",          self._instances_tab,     False),
-            ("BBS",                self._bbs_tab,           False),
-            "CONTENT",
-            ("Bulletins",          self._bulletins_tab,     False),
-            ("Forwarding",         self._forwarding_tab,    False),
-            ("File Upload",        self._file_upload_tab,   False),
-            "CONNECTIVITY",
-            ("Winlink (Pat)",      self._winlink_tab,       False),
-            ("APRS",               self._aprs_tab,          False),
-            "DELIVERY",
-            ("Outbound Delivery",  self._delivery_tab,      False),
-            ("  SMTP Fallback",    self._smtp_providers_tab,  True),
-            ("  Inbound Email Fallback", self._inbound_email_tab, True),
-            ("  Winlink Fwd Mgr",  self._winlink_forward_tab, True),
-            "SECURITY & OPS",
-            ("Security",           self._security_tab,      False),
-            ("Alerts",             self._alerts_tab,        False),
-            ("Notifications",      self._notifications_tab, False),
-            ("Logging",            self._logging_tab,       False),
-            "ABOUT",
-            ("About & Updates",    self._updater_tab,       False),
-        ]
-
-        page_index = 0
-        _first_header = True
-        for entry in page_defs:
-            if isinstance(entry, str):
-                # Section header with integrated divider line.
-                # Uses a single QLabel with border-top as the divider,
-                # rendered via setItemWidget so the border is reliable.
-                header_item = QListWidgetItem()
-                header_item.setFlags(Qt.ItemFlag.NoItemFlags)
-
-                header_lbl = QLabel(f"  {entry}")
-                if _first_header:
-                    header_lbl.setStyleSheet(
-                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
-                        "letter-spacing:1px; background:transparent;"
-                        "padding: 2px 0 0 0;"
-                    )
-                    # 34px = 12px item padding/margin + 8pt text + internal padding
-                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 34))
-                else:
-                    header_lbl.setStyleSheet(
-                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
-                        "letter-spacing:1px; background:transparent;"
-                        "border-top: 1px solid #4e505a;"
-                        "padding: 6px 0 0 0;"
-                    )
-                    # 46px = 12px item overhead + border + padding + text
-                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 46))
-
-                self._nav.addItem(header_item)
-                self._nav.setItemWidget(header_item, header_lbl)
-                _first_header = False
-                continue
-
-            label, builder, is_child = entry
-            item = QListWidgetItem(label)
-            if is_child:
-                # Indent child items with a smaller font
-                font = item.font()
-                font.setPointSize(max(font.pointSize() - 1, 8))
-                item.setFont(font)
-
-            # Store mapping: item → page index
-            item.setData(Qt.ItemDataRole.UserRole, page_index)
-            self._nav.addItem(item)
-
-            # Wrap each page in a scroll area for consistent behaviour
-            page_widget = builder()
-            page_scroll = QScrollArea()
-            page_scroll.setWidget(page_widget)
-            page_scroll.setWidgetResizable(True)
-            page_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            self._pages.addWidget(page_scroll)
-            page_index += 1
+        self._populate_pages()
 
         # Connect sidebar selection → content page
         self._nav.currentItemChanged.connect(self._on_nav_changed)
@@ -3009,7 +2954,7 @@ class SettingsTab(QScrollArea):
         return ae
 
     def _encrypt_winlink_password(self, plaintext: str) -> str:
-        """Encrypt a Winlink password for storage in the config file."""
+        """Encrypt a password or token for storage in the config file."""
         from core.crypto import encrypt_value
         machine = self._config.security.machine_secret
         return encrypt_value(plaintext, machine)
@@ -3074,21 +3019,7 @@ class SettingsTab(QScrollArea):
                 msg = f"Cannot connect to Pat at {addr}:\n{err}"
             QMessageBox.warning(self, "Pat Connection", msg)
 
-    # ── Outbound Delivery settings tabs ─────────────────────────────────────
-
-    def _delivery_tab(self) -> QWidget:
-        from gui.delivery_tabs import OutboundDeliveryTab
-        self._od_tab = OutboundDeliveryTab(self._config)
-        w = self._od_tab.build()
-        if self._delivery_engine:
-            self._od_tab.set_delivery_engine(self._delivery_engine)
-            self._od_tab.start_health_timer()
-        return w
-
-    def _smtp_providers_tab(self) -> QWidget:
-        from gui.delivery_tabs import SMTPProvidersTab
-        self._smtp_tab = SMTPProvidersTab(self._config)
-        return self._smtp_tab.build()
+    # ── Internet email settings tabs ────────────────────────────────────────
 
     def _inbound_email_tab(self) -> QWidget:
         from gui.delivery_tabs import InboundEmailTab
@@ -3203,38 +3134,8 @@ class SettingsTab(QScrollArea):
 
     def _build_outbound_delivery_config(self):
         from delivery.config import (
-            OutboundDeliveryConfig, SMTPDeliveryConfig,
-            SMTPProviderModel,
-            InboundEmailConfig, WinlinkForwardConfig,
+            OutboundDeliveryConfig, InboundEmailConfig, WinlinkForwardConfig,
         )
-
-        # Get values from the delivery tab widgets
-        od_vals = {}
-        if hasattr(self, "_od_tab"):
-            od_vals = self._od_tab.get_config_values()
-
-        # Get SMTP providers from the SMTP tab
-        smtp_providers = []
-        if hasattr(self, "_smtp_tab"):
-            for pd in self._smtp_tab.get_providers():
-                smtp_providers.append(SMTPProviderModel(
-                    provider_id=pd["provider_id"],
-                    display_name=pd["display_name"],
-                    host=pd["host"],
-                    port=pd["port"],
-                    tls_mode=pd["tls_mode"],
-                    username=pd["username"],
-                    password=pd["password"],
-                    sender_email=pd["sender_email"],
-                    sender_name=pd["sender_name"],
-                    enabled=pd["enabled"],
-                    priority=pd["priority"],
-                    failure_threshold=pd.get("failure_threshold", 3),
-                    max_attempts=pd.get("max_attempts", 5),
-                ))
-
-        # Get MTA config from the MTA tab
-
 
         # Get inbound email config
         ie_vals = {}
@@ -3247,13 +3148,6 @@ class SettingsTab(QScrollArea):
             wf_vals = self._wf_tab.get_config_values()
 
         return OutboundDeliveryConfig(
-            engine_enabled=od_vals.get("engine_enabled", False),
-            engine_poll_seconds=od_vals.get("engine_poll_seconds", 30),
-            message_expiry_days=od_vals.get("message_expiry_days", 7),
-            smtp=SMTPDeliveryConfig(
-                enabled=od_vals.get("smtp_enabled", False),
-                providers=smtp_providers,
-            ),
             inbound_email=InboundEmailConfig(
                 enabled=ie_vals.get("enabled", False),
                 protocol=ie_vals.get("protocol", "IMAP"),
@@ -3261,7 +3155,8 @@ class SettingsTab(QScrollArea):
                 port=ie_vals.get("port", 993),
                 use_ssl=ie_vals.get("use_ssl", True),
                 username=ie_vals.get("username", ""),
-                password=ie_vals.get("password", ""),
+                password=self._encrypt_winlink_password(
+                    ie_vals.get("password", "")),
                 folder=ie_vals.get("folder", "INBOX"),
                 bbs_domain=ie_vals.get("bbs_domain", ""),
                 poll_interval=ie_vals.get("poll_interval", 5),
@@ -3392,22 +3287,126 @@ class SettingsTab(QScrollArea):
 
         try:
             cfg = self._build_config()
+            pending = restart_needed(self._cm.current() or self._config, cfg)
             self._cm.save(cfg)
             self._config = cfg
             self._dirty  = False
             self._bus.emit(EventType.CONFIG_CHANGED, data={"config": cfg})
-            QMessageBox.information(self, "Saved", "Settings saved successfully.")
+            if pending:
+                QMessageBox.information(
+                    self, "Saved — restart needed",
+                    "Settings saved. These changes take effect after you "
+                    "restart Aether BBS:\n\n• " + "\n• ".join(pending))
+            else:
+                QMessageBox.information(self, "Saved", "Settings saved successfully.")
             log.info("Settings saved by sysop")
         except Exception as e:
             QMessageBox.critical(self, "Save Failed", str(e))
             log.error(f"Settings save failed: {e}")
 
     def _revert(self):
-        cfg = self._cm.reload()
-        self._config = cfg
-        # Simplest revert: rebuild the tab (recreate widgets)
+        """Throw away unsaved edits: reload the saved settings and rebuild
+        every page from them, so the form shows (and the next Save writes)
+        what is on disk."""
+        self._config = self._cm.reload()
+        row = self._nav.currentRow()
+        self._nav.blockSignals(True)
+        self._nav.clear()
+        while self._pages.count():
+            page = self._pages.widget(0)
+            self._pages.removeWidget(page)
+            page.deleteLater()
+        self._populate_pages()
+        self._nav.blockSignals(False)
+        self._nav.setCurrentRow(max(row, 0))
+        self._on_nav_changed(self._nav.currentItem(), None)
+        self._dirty = False
         QMessageBox.information(self, "Reverted",
-            "Settings reverted to last saved state. Please close and reopen settings.")
+            "Settings reverted to the last saved state.")
+
+    def _populate_pages(self):
+        """Build the sidebar and pages from self._config."""
+        # Each entry is one of:
+        #   (label, builder, is_child) — a selectable page
+        #   "SECTION NAME"            — a non-selectable section header
+        page_defs = [
+            "STATION",
+            ("Station",            self._station_tab,       False),
+            ("Instances",          self._instances_tab,     False),
+            ("BBS",                self._bbs_tab,           False),
+            "CONTENT",
+            ("Bulletins",          self._bulletins_tab,     False),
+            ("Forwarding",         self._forwarding_tab,    False),
+            ("File Upload",        self._file_upload_tab,   False),
+            "CONNECTIVITY",
+            ("Winlink (Pat)",      self._winlink_tab,       False),
+            ("APRS",               self._aprs_tab,          False),
+            "INTERNET EMAIL",
+            ("Inbound Email",      self._inbound_email_tab, False),
+            ("Winlink Fwd Mgr",    self._winlink_forward_tab, False),
+            "SECURITY & OPS",
+            ("Security",           self._security_tab,      False),
+            ("Alerts",             self._alerts_tab,        False),
+            ("Notifications",      self._notifications_tab, False),
+            ("Logging",            self._logging_tab,       False),
+            "ABOUT",
+            ("About & Updates",    self._updater_tab,       False),
+        ]
+
+        page_index = 0
+        _first_header = True
+        for entry in page_defs:
+            if isinstance(entry, str):
+                # Section header with integrated divider line.
+                # Uses a single QLabel with border-top as the divider,
+                # rendered via setItemWidget so the border is reliable.
+                header_item = QListWidgetItem()
+                header_item.setFlags(Qt.ItemFlag.NoItemFlags)
+
+                header_lbl = QLabel(f"  {entry}")
+                if _first_header:
+                    header_lbl.setStyleSheet(
+                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
+                        "letter-spacing:1px; background:transparent;"
+                        "padding: 2px 0 0 0;"
+                    )
+                    # 34px = 12px item padding/margin + 8pt text + internal padding
+                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 34))
+                else:
+                    header_lbl.setStyleSheet(
+                        "color:#e2a84b; font-size:8pt; font-weight:bold;"
+                        "letter-spacing:1px; background:transparent;"
+                        "border-top: 1px solid #4e505a;"
+                        "padding: 6px 0 0 0;"
+                    )
+                    # 46px = 12px item overhead + border + padding + text
+                    header_item.setSizeHint(header_item.sizeHint().__class__(0, 46))
+
+                self._nav.addItem(header_item)
+                self._nav.setItemWidget(header_item, header_lbl)
+                _first_header = False
+                continue
+
+            label, builder, is_child = entry
+            item = QListWidgetItem(label)
+            if is_child:
+                # Indent child items with a smaller font
+                font = item.font()
+                font.setPointSize(max(font.pointSize() - 1, 8))
+                item.setFont(font)
+
+            # Store mapping: item → page index
+            item.setData(Qt.ItemDataRole.UserRole, page_index)
+            self._nav.addItem(item)
+
+            # Wrap each page in a scroll area for consistent behaviour
+            page_widget = builder()
+            page_scroll = QScrollArea()
+            page_scroll.setWidget(page_widget)
+            page_scroll.setWidgetResizable(True)
+            page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self._pages.addWidget(page_scroll)
+            page_index += 1
 
     def _build_config(self) -> AppConfig:
         from core.config import (StationConfig, BBSConfig, APRSConfig,

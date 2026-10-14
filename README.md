@@ -37,7 +37,7 @@ delivery.
 - On-demand CMS polling (sysop via GUI, RF users via the `WL` command)
 - Per-user Winlink mail forwarding (`WLREG` with encrypted password exchange)
 - Winlink passwords encrypted at rest using PBKDF2-derived keys
-- Outbound delivery engine (Winlink primary, SMTP fallback, inbound email polling)
+- Internet email for RF users: inbound IMAP/POP3 polling, outbound through Winlink
 
 ### Chat
 - Sysop-to-user private chat (`CH` command)

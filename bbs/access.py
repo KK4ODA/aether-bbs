@@ -75,6 +75,14 @@ COMMAND_PERMISSIONS: dict[str, Role] = {
 }
 
 
+# Commands whose minimum role the operational mode sets (ModePolicy
+# attribute), in place of the table above.
+MODE_POLICY_ROLES = {
+    "SB": "min_bulletin_post_role", "SUB": "min_bulletin_post_role",
+    "FP": "min_upload_role",
+}
+
+
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 ACCESS_CONTROL_SCHEMA = """
@@ -187,8 +195,12 @@ class AccessController:
                     return Role.UNKNOWN
             return Role.UNKNOWN
 
-    def has_permission(self, callsign: str, command: str) -> bool:
-        """Check if callsign is authorized to execute a command."""
+    def has_permission(self, callsign: str, command: str,
+                       policy=None) -> bool:
+        """Check if callsign is authorized to execute a command.
+
+        ``policy`` (the ModePolicy) sets the minimum role for posting
+        bulletins and uploading files in the current operational mode."""
         role = self.get_role(callsign)
         if role == Role.SYSOP:
             return True
@@ -197,6 +209,8 @@ class AccessController:
 
         cmd_upper = command.upper().split()[0] if command.strip() else ""
         required = COMMAND_PERMISSIONS.get(cmd_upper)
+        if policy is not None and cmd_upper in MODE_POLICY_ROLES:
+            required = Role(getattr(policy, MODE_POLICY_ROLES[cmd_upper]))
 
         if required is None:
             # Unknown command — allow for APPROVED+ (will get "Unknown command")
@@ -566,10 +580,14 @@ class AccessController:
 
     # ── Failure tracking ─────────────────────────────────────────────
 
-    def check_lockout(self, callsign: str) -> tuple[bool, str]:
+    def check_lockout(self, callsign: str,
+                      auto_block_threshold: Optional[int] = None,
+                      ) -> tuple[bool, str]:
         """
         Pre-session check.  Returns (allowed, reason).
         Checks blocked status and auth failure rate limiting.
+        ``auto_block_threshold``: the operational mode's (ModePolicy);
+        defaults to the configured value.
         """
         base = _base_call(callsign)
         cfg = self._cfg()
@@ -594,7 +612,9 @@ class AccessController:
 
         # Auto-block — checked BEFORE temporary lockout so it triggers
         # even when the user is also rate-limited
-        if failures >= sec.auto_block_threshold:
+        if auto_block_threshold is None:
+            auto_block_threshold = sec.auto_block_threshold
+        if failures >= auto_block_threshold:
             self.set_role(base, Role.BLOCKED, changed_by="AUTO",
                           reason=f"auth_failures={failures}")
             return False, "Your callsign has been blocked.\r\n"

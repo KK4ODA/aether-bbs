@@ -552,6 +552,11 @@ def migrate_legacy_config(new_path: Path, legacy_path: Path) -> bool:
 
 # ── ConfigManager ─────────────────────────────────────────────────────────────
 
+# Settings of the SMTP fallback (removed in 1.3.4), dropped from old files.
+_SMTP_FALLBACK_KEYS = ("engine_enabled", "engine_poll_seconds",
+                       "message_expiry_days", "smtp", "routing_overrides")
+
+
 class ConfigManager:
     """Loads, validates, and saves AppConfig from/to TOML."""
 
@@ -580,10 +585,14 @@ class ConfigManager:
         raw = None
         try:
             raw = tomllib.loads(self._path.read_text(encoding="utf-8"))
+            od = raw.get("outbound_delivery")
+            # the removed SMTP fallback kept its passwords in plain text:
+            # rewrite the file so they are gone from disk
+            purged = isinstance(od, dict) and any(k in od for k in _SMTP_FALLBACK_KEYS)
             raw = self._strip_defunct_fields(raw)
             cfg = AppConfig.model_validate(raw)
             cfg, migrated = self._migrate(cfg)
-            if migrated:
+            if migrated or purged:
                 self.save(cfg)
                 log.info(f"Config migrated and saved to {self._path}")
             else:
@@ -663,6 +672,11 @@ class ConfigManager:
         if isinstance(upd, dict):
             upd.pop("include_aether", None)
 
+        od = raw.get("outbound_delivery")
+        if isinstance(od, dict):
+            for k in _SMTP_FALLBACK_KEYS:
+                od.pop(k, None)
+
         return raw
 
     def _migrate(self, cfg: AppConfig) -> tuple[AppConfig, bool]:
@@ -737,6 +751,15 @@ class ConfigManager:
             cfg = AppConfig.model_validate(data)
             changed = True
             log.info("Encrypted Winlink gateway_password at rest")
+
+        # Encrypt the inbound email (IMAP/POP3) password at rest
+        ie = (data.get("outbound_delivery") or {}).get("inbound_email") or {}
+        ie_pw = ie.get("password", "")
+        if ie_pw and not ie_pw.startswith(ENC_PREFIX) and machine:
+            ie["password"] = encrypt_value(ie_pw, machine)
+            cfg = AppConfig.model_validate(data)
+            changed = True
+            log.info("Encrypted inbound email password at rest")
 
         # Encrypt Aether HF control tokens at rest
         if machine:

@@ -23,6 +23,7 @@ personal messages in their mailbox.
 import email
 import email.utils
 import email.header
+import email.message
 import hashlib
 import imaplib
 import poplib

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QGroupBox,
     QHeaderView, QPushButton, QSizePolicy, QComboBox,
     QLineEdit, QTextEdit, QDialog, QFormLayout, QDialogButtonBox,
-    QMessageBox, QApplication,
+    QMessageBox, QApplication, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QColor
@@ -274,6 +274,14 @@ class BBSStatusPanel(QWidget):
         self._compose_body.setPlaceholderText("Message body...")
         self._compose_body.setMinimumHeight(60)
         cg_layout.addWidget(self._compose_body, stretch=1)
+
+        # Delivery path: held for RF pickup unless sent through Winlink
+        self._compose_winlink = QCheckBox(
+            "Send via Winlink (internet addresses always go via Winlink)")
+        self._compose_winlink.setToolTip(
+            "Unchecked: the message waits here until the station collects "
+            "it over RF.")
+        cg_layout.addWidget(self._compose_winlink)
 
         # Send button — full width for clear call to action
         self._compose_send_btn = QPushButton("📨  Send Message")
@@ -545,7 +553,7 @@ class BBSStatusPanel(QWidget):
             Q_ARG(str, event.source), Q_ARG(str, call), Q_ARG(str, stype))
 
     def _on_session_ended(self, event):
-        """Fired when the interactive/B2F session object closes."""
+        """Fired when the interactive session object closes."""
         call = (event.data or {}).get("remote_call", "")
         from PyQt6.QtCore import QMetaObject, Q_ARG
         QMetaObject.invokeMethod(self, "_remove_active_session",
@@ -677,7 +685,10 @@ class BBSStatusPanel(QWidget):
             area="PRIVATE",
             instance="SYSOP-GUI",
         )
-        log.info(f"GUI: sysop composed message MID={mid} to={to_call}")
+        from winlink.queue import route_new_message
+        route = route_new_message(self._store, mid, to_call,
+                                  self._compose_winlink.isChecked())
+        log.info(f"GUI: sysop composed message MID={mid} to={to_call} ({route})")
         self._bus.emit(EventType.MESSAGE_RECEIVED, source="SYSOP-GUI",
                        data={"from": sysop, "to": to_call, "mid": mid,
                              "subject": subject})
@@ -686,6 +697,7 @@ class BBSStatusPanel(QWidget):
         self._compose_to.clear()
         self._compose_subject.clear()
         self._compose_body.clear()
+        self._compose_winlink.setChecked(False)
         self._compose_to.setPlaceholderText("Callsign (e.g. WD5EMA)")
         self._compose_subject.setPlaceholderText("Subject line")
         self._compose_body.setPlaceholderText("Message body...")

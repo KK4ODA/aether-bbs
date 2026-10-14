@@ -29,7 +29,7 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
-    QPushButton, QFrame, QGroupBox,
+    QPushButton, QFrame, QGroupBox, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QFont
@@ -160,6 +160,15 @@ class ReplyDialog(QDialog):
         self._body_edit.setPlaceholderText("Type your reply here…")
         layout.addWidget(self._body_edit)
 
+        # Delivery path: a message that came from Winlink is answered
+        # through Winlink; anything else waits for RF pickup by default
+        original = self._store.get_message(self._original_mid) or {}
+        self._via_winlink = QCheckBox(
+            "Send via Winlink (internet addresses always go via Winlink)")
+        self._via_winlink.setChecked(original.get("cms_status") == "RECEIVED")
+        self._via_winlink.setStyleSheet(f"color:{_TEXT_PRI};")
+        layout.addWidget(self._via_winlink)
+
         # Send / Cancel
         btn_layout = QHBoxLayout()
         cancel_btn = QPushButton("✕  Cancel")
@@ -199,6 +208,9 @@ class ReplyDialog(QDialog):
             subject=subj,
             body=body_text.encode("utf-8"),
         )
+        from winlink.queue import route_new_message
+        route_new_message(self._store, new_mid, self._from_call,
+                          self._via_winlink.isChecked())
         self._store.mark_replied(self._original_mid, operator=self._our_call)
         log.info(f"Reply sent: MID={new_mid} to={self._from_call}")
         self.reply_sent.emit(new_mid)

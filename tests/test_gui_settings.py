@@ -85,8 +85,6 @@ def test_save_keeps_settings_the_tab_has_no_widget_for(qapp, tmp_path):
         '[bbs]\nmessage_dir = "D:/bbsdata/messages"\n'
         '[aprs]\nbeacon_symbol = "\\\\k"\n'
         '[logging]\nmax_bytes = 100000\nbackup_count = 9\n'
-        '[[outbound_delivery.routing_overrides]]\n'
-        'pattern = "@example.org"\nbackend = "SMTP"\n'
         '[[instances]]\nname = "VHF"\n'
     ))
     tab._welcome.setText("edited welcome")
@@ -95,7 +93,6 @@ def test_save_keeps_settings_the_tab_has_no_widget_for(qapp, tmp_path):
     assert cfg.bbs.welcome_message == "edited welcome"      # the edit applies
     assert cfg.aprs.beacon_symbol == "\\k"
     assert (cfg.logging.max_bytes, cfg.logging.backup_count) == (100000, 9)
-    assert [o.pattern for o in cfg.outbound_delivery.routing_overrides] == ["@example.org"]
 
 
 def test_overlay_keeps_unset_fields_and_replaces_lists():
@@ -145,3 +142,107 @@ def test_one_bad_value_does_not_wipe_the_config(tmp_path):
     assert list(tmp_path.glob("aether_bbs.toml.bad.*"))  # original kept
     again = ConfigManager(path).load()                  # and the saved file loads
     assert again.security.machine_secret == "s3cret-abc"
+
+
+def test_revert_puts_the_saved_values_back_in_the_form(qapp, tmp_path, monkeypatch):
+    """Revert used to reload the config but leave the edited widgets, so
+    the next Save wrote the edits anyway."""
+    from gui import settings as settings_mod
+    monkeypatch.setattr(settings_mod.QMessageBox, "information",
+                        lambda *a, **k: None)
+    cm, tab = _tab(tmp_path, '[updater]\nauto_check_interval_hours = 12\n'
+                             '[[instances]]\nname = "HF"\n')
+    pages = tab._pages.count()
+    tab._upd_interval.setValue(99)
+    tab._inst_name.setText("EDITED")
+    tab._revert()
+    assert tab._upd_interval.value() == 12
+    cfg = tab._build_config()
+    assert cfg.updater.auto_check_interval_hours == 12
+    assert cfg.instances[0].name == "HF"
+    assert tab._pages.count() == pages          # rebuilt, not duplicated
+
+
+def test_old_smtp_fallback_settings_are_purged_from_disk(tmp_path):
+    """The SMTP fallback is gone; its plain-text provider passwords must not
+    stay in the file, and the inbound email settings beside them must."""
+    from core.config import ConfigManager
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text(
+        '[outbound_delivery]\nengine_enabled = true\n'
+        '[outbound_delivery.inbound_email]\nhost = "imap.example.org"\n'
+        '[outbound_delivery.smtp]\nenabled = true\n'
+        '[[outbound_delivery.smtp.providers]]\nhost = "smtp.example.org"\n'
+        'password = "hunter2"\n', encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert cfg.outbound_delivery.inbound_email.host == "imap.example.org"
+    text = path.read_text(encoding="utf-8")
+    assert "hunter2" not in text and "smtp" not in text
+
+
+def test_reply_goes_back_the_way_the_message_came(qapp, tmp_path):
+    """A reply to Winlink mail goes through Winlink; a reply to a local RF
+    user waits for RF pickup (it used to be sent to the CMS at the next
+    poll, whoever it was for)."""
+    from bbs.store import MessageStore
+    from core.config import AppConfig
+    from gui.message_viewer import ReplyDialog
+    cfg = AppConfig()
+    cfg.bbs.message_dir = str(tmp_path / "messages")
+    store = MessageStore(cfg)
+    store.initialize()
+    from_cms = store.save_message("W1AW", "KK4ODA", "hi", b"x")
+    store.set_cms_status(from_cms, "RECEIVED")
+    from_rf = store.save_message("N0RF", "KK4ODA", "hi", b"x")
+    routes = {}
+    for mid, sender in ((from_cms, "W1AW"), (from_rf, "N0RF")):
+        dlg = ReplyDialog(store, mid, sender, "KK4ODA", "hi")
+        dlg._body_edit.setPlainText("thanks")
+        dlg.reply_sent.connect(lambda new, s=sender: routes.__setitem__(s, new))
+        dlg._send()
+    assert store.get_message(routes["W1AW"])["cms_status"] == "QUEUED"
+    assert store.get_message(routes["N0RF"])["cms_status"] == "LOCAL"
+
+
+def test_inbound_email_password_is_encrypted_at_rest(qapp, tmp_path):
+    from core.config import ConfigManager
+    from core.events import EventBus
+    from gui.settings import SettingsTab
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text('[outbound_delivery.inbound_email]\nusername = "bbs"\n'
+                    'password = "imap-secret"\n', encoding="utf-8")
+    cm = ConfigManager(path)
+    cfg = cm.load()
+    assert "imap-secret" not in path.read_text(encoding="utf-8")
+    ie = cfg.outbound_delivery.inbound_email
+    assert ie.password.startswith("ENC:")
+    assert ie.decrypt_password(cfg.security.machine_secret) == "imap-secret"
+
+    tab = SettingsTab(cm, cfg, EventBus())
+    assert tab._ie_tab.widgets["password"].text() == "imap-secret"
+    tab._ie_tab.widgets["password"].setText("new-secret")
+    saved = tab._build_config()
+    cm.save(saved)
+    assert "new-secret" not in path.read_text(encoding="utf-8")
+    assert saved.outbound_delivery.inbound_email.decrypt_password(
+        saved.security.machine_secret) == "new-secret"
+
+
+def test_settings_that_need_a_restart_are_named():
+    from core.config import AppConfig, ForwardingNeighbourConfig, InstanceConfig
+    from gui.settings import restart_needed
+    old = AppConfig(instances=[InstanceConfig(name="HF", enabled=False)])
+    assert restart_needed(old, old.model_copy(deep=True)) == []
+
+    new = old.model_copy(deep=True)
+    new.instances[0].enabled = True
+    new.instances.append(InstanceConfig(name="VHF", cmd_port=8310, data_port=8311))
+    new.aprs.enabled = True
+    new.bbs.forwarding_neighbours = [ForwardingNeighbourConfig(bbs_callsign="W2BBB")]
+    new.updater.auto_check_interval_hours = 6
+    new.outbound_delivery.inbound_email.host = "imap.example.org"
+    new.bbs.welcome_message = "hello"              # live: not listed
+    assert restart_needed(old, new) == [
+        "Inbound email", "Bulletin forwarding (neighbours and server)",
+        "APRS (turning it on)", "Enabling modem instance HF",
+        "New modem instance VHF", "Update check interval"]

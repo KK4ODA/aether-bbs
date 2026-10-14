@@ -103,7 +103,6 @@ class InteractiveSession:
         disconnect_fn,   # callable() — disconnects the RF session
         bulletin_store: Optional[BulletinStore] = None,
         file_store=None,
-        b2f_handoff_fn=None,  # callable(first_line) — hand off to B2F session
         access_controller=None,  # bbs.access.AccessController
         mode_policy=None,        # bbs.mode_policy.ModePolicy
         rate_limiter=None,       # bbs.rate_limiter.RateLimiter
@@ -141,7 +140,6 @@ class InteractiveSession:
         self._is_sysop = (
             self.remote_call == config.station.sysop_callsign.upper()
         )
-        self._b2f_handoff = b2f_handoff_fn
         # Set once the RF link is gone: every prompt then ends at once
         self._link_down = False
         # Area of the last L / LB, so R/K and RB/KB number the same list
@@ -388,6 +386,9 @@ class InteractiveSession:
                 self._disconnect()
                 return
             elif cmd in ("REGISTER", "REG"):
+                if self._rate_limited("register", prompt=False):
+                    self._send("> ")
+                    continue
                 if self._access:
                     ref = self._prompt_community_ref()
                     if ref is None:
@@ -477,6 +478,13 @@ class InteractiveSession:
             return True
 
         # Has password — HMAC-SHA256 challenge-response
+        if self._rate_limiter and self._rate_limiter.exhausted(
+                self.remote_call, "auth_failure"):
+            self._send("Too many failed authentication attempts.\r\n"
+                       "Try again later.\r\n")
+            time.sleep(0.5)
+            self._disconnect()
+            return False
         nonce = self._access.generate_challenge(self.remote_call)
         self._send(f";AUTH HMAC-SHA256 {nonce}\r\n")
         self._send("Enter password (or HMAC client will respond automatically):\r\n")
@@ -496,6 +504,7 @@ class InteractiveSession:
         if line is None or not isinstance(line, str) or line is _RF_DISCONNECTED:
             self._send("Authentication timed out.\r\n")
             self._access.record_auth_failure(self.remote_call)
+            self._count_auth_failure()
             self._disconnect()
             return False
 
@@ -508,6 +517,7 @@ class InteractiveSession:
         if not response:
             self._send(";AUTH FAIL\r\n")
             self._access.record_auth_failure(self.remote_call)
+            self._count_auth_failure()
             self._disconnect()
             return False
 
@@ -516,9 +526,38 @@ class InteractiveSession:
             return True
         else:
             self._send(";AUTH FAIL\r\n")
+            self._count_auth_failure()
             time.sleep(0.5)
             self._disconnect()
             return False
+
+    def _count_auth_failure(self):
+        if self._rate_limiter:
+            self._rate_limiter.check(self.remote_call, "auth_failure")
+
+    _RATE_LIMITED_TEXT = {
+        "message_send":  "You have sent too many messages",
+        "bulletin_post": "You have posted too many bulletins",
+        "file_upload":   "You have uploaded too many files",
+        "register":      "Too many registration attempts",
+    }
+
+    def _rate_limited(self, event: str, prompt: bool = True) -> bool:
+        """Count one *event* for this station; when it is over the limit
+        for the operational mode, say so and return True."""
+        if not self._rate_limiter:
+            return False
+        allowed, count = self._rate_limiter.check(self.remote_call, event)
+        if allowed:
+            return False
+        self._send(f"{self._RATE_LIMITED_TEXT.get(event, 'Rate limit exceeded')}"
+                   f". Try again later.\r\n")
+        if self._access:
+            self._access.audit(self.remote_call, "RATE_LIMITED",
+                               f"{event} count={count}", self.instance_name)
+        if prompt:
+            self._show_prompt()
+        return True
 
     # ── Tactical address ─────────────────────────────────────────────────
 
@@ -559,13 +598,17 @@ class InteractiveSession:
     # ── Command dispatch ──────────────────────────────────────────────────
 
     def _handle_command(self, cmd: str):
-        # Detect a Winlink B2F session request — remote sends "[WL2K-...]"
-        # Hand off transparently so Winlink clients get a proper B2F exchange.
-        if cmd.startswith("[") and self._b2f_handoff:
-            log.info(f"[{self.instance_name}] B2F header detected from "
-                     f"{self.remote_call} — handing off to B2F session")
+        # A Winlink client opens with its banner ("[RMS Express-...]").
+        # This BBS has no B2F message exchange (Winlink mail goes through
+        # Pat): say so the way B2F reports errors, and hang up.
+        if cmd.startswith("[") and cmd.rstrip().endswith("]"):
+            log.info(f"[{self.instance_name}] Winlink client {self.remote_call} "
+                     f"refused: no B2F here ({cmd[:40]})")
+            self._send("*** This BBS does not offer Winlink (B2F) message "
+                       "exchange. Use a Winlink gateway.\r\n")
             self._running = False
-            self._b2f_handoff(cmd)
+            time.sleep(0.5)
+            self._disconnect()
             return
 
         upper = cmd.upper()
@@ -597,6 +640,8 @@ class InteractiveSession:
 
         # ── REGISTER / SETPASS — always available ────────────────────
         if upper in ("REGISTER", "REG"):
+            if self._rate_limited("register"):
+                return
             if self._access:
                 ref = self._prompt_community_ref()
                 if ref is None:
@@ -652,7 +697,8 @@ class InteractiveSession:
             return
 
         # ── Access control permission check ──────────────────────────
-        if self._access and not self._access.has_permission(self.remote_call, cmd):
+        if self._access and not self._access.has_permission(
+                self.remote_call, cmd, policy=self._policy):
             self._send("Permission denied for this command.\r\n")
             if self._access:
                 self._access.audit(self.remote_call, "COMMAND_DENIED",
@@ -1000,6 +1046,8 @@ class InteractiveSession:
             self._send(usage)
             self._show_prompt()
             return
+        if self._rate_limited("message_send"):
+            return
 
         # Email addresses always go via Winlink regardless of S vs SW
         has_at = "@" in dest_call
@@ -1030,15 +1078,15 @@ class InteractiveSession:
         self._msgs_recv += 1
 
         # Routing: SW or email → Winlink CMS; plain S → local RF pickup
-        if force_winlink or has_at:
+        from winlink.queue import route_new_message
+        if route_new_message(self._store, mid, dest_call,
+                             force_winlink) == "QUEUED":
             if self._outbound_queue:
-                self._outbound_queue.queue_for_cms(mid)
                 self._send("Message saved and queued for Winlink delivery.\r\n")
             else:
-                self._send("Message saved (Winlink not available — held locally).\r\n")
+                self._send("Message saved; it goes out once Winlink is "
+                           "running.\r\n")
         else:
-            # Local message — mark LOCAL so the auto-router doesn't queue it
-            self._store.set_cms_status(mid, "LOCAL")
             self._send("Message saved (local — held for RF pickup).\r\n")
         self._show_prompt()
 
@@ -1194,6 +1242,8 @@ class InteractiveSession:
             if all_areas:
                 self._send("Available groups: " + ", ".join(sorted(all_areas)) + "\r\n")
             self._show_prompt()
+            return
+        if self._rate_limited("bulletin_post"):
             return
 
         group_upper = group.upper()
@@ -1907,6 +1957,9 @@ class InteractiveSession:
                 f"file={filename_hint} area={area_hint}"
             )
             self._show_prompt()
+            return
+
+        if self._rate_limited("file_upload"):
             return
 
         mb = self._files._config.file_upload.max_file_bytes // (1024 * 1024)

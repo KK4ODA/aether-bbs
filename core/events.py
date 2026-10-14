@@ -43,7 +43,6 @@ class EventType(Enum):
     SESSION_ENDED            = auto()   # BBS session handler completed
     SESSION_BUSY             = auto()   # connection rejected — BBS at max sessions
     MESSAGE_RECEIVED         = auto()   # new message stored
-    MESSAGE_SENT             = auto()   # message forwarded to remote
     PRIORITY_MESSAGE_RECEIVED= auto()   # message to home tactical callsign
     BULLETIN_POSTED          = auto()   # bulletin saved (RF or forwarded)
 
