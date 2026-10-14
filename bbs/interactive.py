@@ -1941,6 +1941,11 @@ class InteractiveSession:
             return
         _, h_area, h_filename, h_size_str, h_crc = hparts[:5]
         h_desc = hparts[5] if len(hparts) > 5 else desc_hint
+        if h_area.upper() != area_hint:
+            # the area was checked above; the header must not name another
+            self._send(f"PUTFILE area {h_area.upper()} does not match {area_hint}.\r\n")
+            self._show_prompt()
+            return
         try:
             h_size = int(h_size_str)
         except ValueError:
@@ -1958,7 +1963,8 @@ class InteractiveSession:
         self._send("GO\r\n")   # signal client to start streaming
         buf = io.BytesIO()
         b64_chars = 0
-        expected_b64 = len(base64.b64encode(b"\x00" * h_size))  # rough upper bound
+        # base64 of h_size bytes, plus room for line padding
+        b64_limit = 4 * ((h_size + 2) // 3) + 1024
 
         while True:
             line = self._get_line(timeout=self._config.bbs.session_timeout)
@@ -1975,6 +1981,12 @@ class InteractiveSession:
                 break
             if line.upper() == "CANCEL":
                 self._send("Upload cancelled.\r\n")
+                self._show_prompt()
+                return
+            b64_chars += len(line)
+            if b64_chars > b64_limit:
+                # more than the declared size: stop before it fills memory
+                self._send(f"ERROR More data than the declared {h_size} bytes. Aborting.\r\n")
                 self._show_prompt()
                 return
             try:

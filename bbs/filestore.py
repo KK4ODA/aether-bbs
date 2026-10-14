@@ -582,6 +582,16 @@ class FileStore:
         fu = self._config.file_upload
         area = area.upper()
 
+        # The area names a folder under files/: only a registered area
+        # (enabled, for RF uploads), never a path such as "../X" or "/X"
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT enabled FROM file_areas WHERE name=?", (area,)
+            ).fetchone()
+        if row is None or (is_remote and not row[0]):
+            self._emit_upload_denied(uploader, filename, area, "unknown_area")
+            return False, f"Unknown file area: {area}"
+
         # ── Policy checks (RF uploads only) ──────────────────────────────
         if is_remote:
             if not fu.allow_remote_uploads:
