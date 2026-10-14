@@ -24,11 +24,14 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from urllib.request import Request, urlopen
 
 from bbs.store import MessageStore, MessageStatus
 from core.events import EventBus, EventType
+
+if TYPE_CHECKING:
+    from winlink.queue import OutboundQueue
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +155,10 @@ class PatClient:
     def start(self):
         """Start the Pat client and polling service."""
         self._running = True
+        # A shutdown or crash mid-send leaves messages in SENDING, which the
+        # sender never picks up again: put them back in the queue
+        if self._queue is not None:
+            self._queue.rollback_sending()
 
         if self._enabled:
             # Validate Pat installation
@@ -549,9 +556,6 @@ class PatClient:
                 if mid in self._seen_ids:
                     continue
 
-                self._seen_ids.add(mid)
-                self._save_seen_ids()
-
                 # Parse message fields (Pat uses inconsistent casing)
                 subject = msg.get("Subject", "") or msg.get("subject", "")
                 from_field = msg.get("From", msg.get("from", ""))
@@ -563,7 +567,6 @@ class PatClient:
                     from_addr = str(from_field) if from_field else ""
 
                 body_text = msg.get("Body", "") or msg.get("body", "")
-                date_str = msg.get("Date", "") or msg.get("date", "")
 
                 to_field = msg.get("To", msg.get("to", ""))
                 if isinstance(to_field, list) and to_field:
@@ -587,6 +590,7 @@ class PatClient:
                 # Skip if already in the store (avoids duplicate alerts on restart)
                 if self._store.get_message(mid):
                     log.debug("Skipping already-stored message MID=%s", mid[:20])
+                    self._mark_seen(mid)
                     continue
 
                 # Store in BBS message store as an inbound Winlink message
@@ -601,9 +605,11 @@ class PatClient:
                     # Tag as received from Winlink
                     self._store.set_cms_status(stored_mid, MessageStatus.RECEIVED)
                 except Exception as e:
+                    # not marked seen: the next inbox check tries it again
                     log.warning("Failed to store inbound Winlink message %s: %s", mid, e)
                     continue
 
+                self._mark_seen(mid)
                 new_count += 1
 
                 # Emit event for GUI / notifications
@@ -713,7 +719,7 @@ class PatClient:
             return False
 
         except subprocess.TimeoutExpired:
-            log.warning("Pat session timed out (%ds)", timeout)
+            log.warning("Pat session timed out (%ds)", self._cms_timeout)
             return False
         except Exception as e:
             log.warning("Pat connect failed: %s", e)
@@ -879,6 +885,10 @@ class PatClient:
                     )
             except Exception:
                 pass
+
+    def _mark_seen(self, mid: str):
+        self._seen_ids.add(mid)
+        self._save_seen_ids()
 
     def _save_seen_ids(self):
         """Persist seen message IDs to disk."""
