@@ -70,6 +70,8 @@ delivery.
 
 ## Quick Start
 
+The full sysop and user manual is in [`docs/MANUAL.md`](docs/MANUAL.md).
+
 1. Download the installer for your computer from the
    [latest release](https://github.com/KK4ODA/aether-bbs/releases/latest):
 
