@@ -397,3 +397,50 @@ def test_link_drop_while_typing_a_bulletin_saves_nothing(bbs):
     u.t.join(timeout=5)
     assert not u.t.is_alive()
     assert bulletins.list_bulletins() == []
+
+
+# ── Idle timeout ─────────────────────────────────────────────────────────
+
+class _TimesOut:
+    """An InteractiveSession whose next wait for a line times out at once
+    (as if session_timeout had passed), with the hang-ups it asks for."""
+
+    def __init__(self, call, cfg, store, bulletins, access=None, policy=None):
+        self.out, self.hangups = [], []
+        self.s = InteractiveSession(call, "fm1", cfg, store, EventBus(),
+                                    self.out.append,
+                                    lambda: self.hangups.append(True),
+                                    bulletin_store=bulletins,
+                                    access_controller=access, mode_policy=policy)
+        self.s._check_internet = lambda *a, **k: True
+        self.s._get_line = lambda timeout=60: None
+        self.t = threading.Thread(target=self.s.run, daemon=True)
+        self.t.start()
+        self.t.join(timeout=10)
+
+
+@pytest.mark.parametrize("role", [None, "UNKNOWN", "PENDING"])
+def test_idle_timeout_hangs_up_the_link(bbs, role):
+    """A session that timed out said "Session timeout. 73" and ended, but
+    never sent DISCONNECT: the RF link stayed up and the caller's terminal
+    stayed connected.  The same for the restricted sessions' 120 s wait."""
+    cfg, store, bulletins = bbs
+    access = policy = None
+    if role:
+        from bbs.access import Role
+        access, policy, _ = _secured(cfg, store, "restricted")
+        access.set_role("W1XYZ", Role[role])
+    u = _TimesOut("W1XYZ", cfg, store, bulletins, access, policy)
+    assert not u.t.is_alive()
+    assert "Session timeout. 73 de BBS." in "".join(u.out)
+    assert u.hangups == [True]
+
+
+def test_link_drop_is_not_answered_with_a_timeout(bbs):
+    from bbs.access import Role
+    cfg, store, bulletins = bbs
+    access, policy, _ = _secured(cfg, store, "restricted")
+    access.set_role("W1XYZ", Role.UNKNOWN)
+    u = Session("W1XYZ", cfg, store, bulletins)
+    u.close()                                   # the link drops (feed_line(None))
+    assert "Session timeout" not in "".join(u.out)
