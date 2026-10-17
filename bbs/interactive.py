@@ -331,8 +331,7 @@ class InteractiveSession:
                     log.info(f"[{self.instance_name}] RF disconnected: {self.remote_call}")
                     break  # link is gone — do not attempt to send
                 if line is None:
-                    log.info(f"[{self.instance_name}] Session timeout for {self.remote_call}")
-                    self._send("\r\nSession timeout. 73 de BBS.\r\n")
+                    self._end_on_timeout()
                     break
                 if line is _SYSOP_CHAT_INITIATE:
                     self._cmd_chat(sysop_initiated=True)
@@ -359,6 +358,18 @@ class InteractiveSession:
                            data={"remote_call": self.remote_call})
             log.info(f"Interactive session ended: {self.remote_call}")
 
+    def _end_on_timeout(self):
+        """The caller has been idle too long: say so and hang up.
+
+        Ending the session alone leaves the RF link up (the modem only
+        drops it on DISCONNECT), and the caller's terminal still connected.
+        """
+        log.info(f"[{self.instance_name}] Session timeout for {self.remote_call}")
+        self._send("\r\nSession timeout. 73 de BBS.\r\n")
+        self._running = False
+        time.sleep(0.3)
+        self._disconnect()
+
     # ── Restricted session loops ─────────────────────────────────────────
 
     def _run_unknown_session(self):
@@ -376,6 +387,9 @@ class InteractiveSession:
         self._send("> ")
         while self._running:
             line = self._get_line(timeout=120)
+            if line is None and not self._link_down:
+                self._end_on_timeout()
+                return
             if line is _RF_DISCONNECTED or line is None:
                 break
             cmd = line.strip().upper() if isinstance(line, str) else ""
@@ -418,6 +432,9 @@ class InteractiveSession:
         self._send("> ")
         while self._running:
             line = self._get_line(timeout=120)
+            if line is None and not self._link_down:
+                self._end_on_timeout()
+                return
             if line is _RF_DISCONNECTED or line is None:
                 break
             cmd = line.strip().upper() if isinstance(line, str) else ""
