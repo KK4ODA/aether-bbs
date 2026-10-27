@@ -305,9 +305,10 @@ class BBSStatusPanel(QWidget):
             "color:#e74c3c;font-size:9pt;font-weight:bold;padding:4px;"
         )
         self._upload_denied_lbl.setToolTip(
-            "Uploads may be denied if the user's role lacks\n"
-            "upload privileges (only TRUSTED and SYSOP can upload)\n"
-            "or if the file exceeds the configured size limit."
+            "Uploads may be denied if the user's role is below the\n"
+            "operational mode's minimum (TRUSTED in Restricted mode,\n"
+            "APPROVED in Open, SYSOP in EMCOMM), by the File Upload\n"
+            "policy, or if the file exceeds the configured size limit."
         )
         self._upload_denied_lbl.setVisible(False)
         layout.addWidget(self._upload_denied_lbl)

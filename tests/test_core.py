@@ -504,3 +504,95 @@ def test_sms_text_cannot_inject_modem_commands():
     # Ctrl+Z would end the SMS and the rest would be run as an AT command
     assert sms_safe_text("NEW MSG\x1aAT+CMGD=1,4\x1b") == "NEW MSGAT+CMGD=1,4"
     assert sms_safe_text("line1\r\nline2\t!") == "line1\nline2!"
+
+
+# ── 1.3.9 ────────────────────────────────────────────────────────────────────
+
+def _readme_transport_example() -> str:
+    text = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+    section = text.split("## Transport Configuration", 1)[1]
+    return section.split("```toml", 1)[1].split("```", 1)[0]
+
+
+def test_readme_transport_example_loads(tmp_path):
+    """Its Soundmodem instance took cmd_port 8300 by default and the file
+    was refused: "Port 8300 is used by more than one enabled instance"."""
+    from core.config import ConfigManager
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text(_readme_transport_example(), encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert not list(tmp_path.glob("*.bad.*"))          # not salvaged
+    assert [i.name for i in cfg.instances] == ["VHF", "HF-VARA", "HF-Aether", "Packet"]
+    assert cfg.instances[3].soundmodem.port == 8000
+
+
+def test_port_check_compares_only_the_ports_an_instance_uses():
+    from core.config import AppConfig, InstanceConfig, SoundmodemConfig
+    from pydantic import ValidationError
+    vhf = InstanceConfig(name="VHF")                               # 8300/8301
+    pkt = InstanceConfig(name="Pkt", transport="SOUNDMODEM")       # also 8300/8301
+    AppConfig(instances=[vhf, pkt])                                # fine: uses 8000
+    with pytest.raises(ValidationError):
+        AppConfig(instances=[pkt, InstanceConfig(name="Pkt2", transport="SOUNDMODEM")])
+    with pytest.raises(ValidationError):
+        AppConfig(instances=[vhf, InstanceConfig(
+            name="Pkt", transport="SOUNDMODEM",
+            soundmodem=SoundmodemConfig(port=8301))])
+
+
+def test_new_settings_have_no_sample_tactical_address(tmp_path):
+    from core.config import AppConfig, ConfigManager
+    assert AppConfig().station.tactical_addresses == []
+    # one already in a settings file stays there
+    path = tmp_path / "aether_bbs.toml"
+    path.write_text('[[station.tactical_addresses]]\ncallsign = "BRECKEN"\n',
+                    encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert [t.callsign for t in cfg.station.tactical_addresses] == ["BRECKEN"]
+
+
+def test_messages_expire_without_pressing_expire_old(tmp_path):
+    """Expiry ran only when the sysop pressed Expire Old."""
+    import time
+    from core.config import AppConfig
+    from bbs.store import MessageStore
+    cfg = AppConfig()
+    cfg.bbs.message_dir = str(tmp_path / "messages")
+    store = MessageStore(cfg)
+    store.initialize()
+    old = store.save_message("W1A", "W2B", "old", b"x")
+    keep = store.save_message("W1A", "W2B", "new", b"x")
+    with store.lock:
+        store.conn.execute("UPDATE messages SET expires_at='2000-01-01' WHERE id=?",
+                           (old,))
+        store.conn.commit()
+    store.start_auto_expiry(interval=0.1)
+    try:
+        deadline = time.time() + 5
+        while store.has_message(old) and time.time() < deadline:
+            time.sleep(0.05)
+        assert not store.has_message(old) and store.has_message(keep)
+    finally:
+        store.close()
+
+
+def test_the_sysop_callsign_always_has_a_user_row(tmp_path):
+    """After a sysop callsign change the new call had no row: Add User
+    refused it ("already exists with role SYSOP") and Password needs one."""
+    import sqlite3, threading
+    from core.config import AppConfig
+    from bbs.access import AccessController, Role
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    cfg = AppConfig()
+    cfg.station.sysop_callsign = "KK4ODA"
+    ac = AccessController(conn, threading.Lock(), cfg)
+    ac.migrate_from_whitelist(cfg)                 # first start: the row is made
+    assert ac.ensure_sysop_row(cfg) is False
+    cfg.station.sysop_callsign = "W1NEW-5"         # changed in Settings
+    assert ac.ensure_sysop_row(cfg) is True
+    assert ac.ensure_sysop_row(cfg) is False
+    rows = {u["callsign"]: u["role"] for u in ac.list_users()}
+    assert rows["W1NEW"] == Role.SYSOP.value
+    ac.provision_password("W1NEW")
+    assert ac.has_password("W1NEW-5")

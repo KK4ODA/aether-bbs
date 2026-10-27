@@ -568,7 +568,7 @@ class ModemInstanceManager:
     def _check_port_conflicts(self):
         seen: set[int] = set()
         for status in self._instances.values():
-            for port in (status.cfg.cmd_port, status.cfg.data_port):
+            for port in status.cfg.used_ports():
                 if port in seen:
                     raise PortConflictError(
                         f"Port {port} is used by more than one enabled instance"

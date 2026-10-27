@@ -37,10 +37,10 @@ class InboundEmailTab:
             "Internet users can send email to your BBS users without "
             "needing a Winlink account.<br><br>"
             "<b>Flow:</b> Internet sender emails "
-            "<code>yourmail+BRECKEN@gmail.com</code> &rarr; arrives in "
+            "<code>yourmail+KK4ODA@gmail.com</code> &rarr; arrives in "
             "your Gmail inbox &rarr; BBS polls it &rarr; extracts "
-            "<code>BRECKEN</code> from the address &rarr; stores as a "
-            "BBS message &rarr; BRECKEN reads it next time they connect "
+            "<code>KK4ODA</code> from the address &rarr; stores as a "
+            "BBS message &rarr; KK4ODA reads it next time they connect "
             "over RF.<br><br>"
             "<b>Gmail Plus-Addressing (no custom domain needed):</b><br>"
             "Gmail delivers <code>you+anything@gmail.com</code> to "
@@ -48,7 +48,10 @@ class InboundEmailTab:
             "the <code>+callsign</code> part to route the message.<br>"
             "Set <b>BBS Domain</b> below to <code>gmail.com</code> and "
             "give each RF user an address like "
-            "<code>youraccount+CALLSIGN@gmail.com</code>.<br><br>"
+            "<code>youraccount+CALLSIGN@gmail.com</code>. A tactical "
+            "address from Settings &rarr; Station works too "
+            "(<code>youraccount+EOC@gmail.com</code>) and raises its "
+            "priority alert.<br><br>"
             "<i>One inbox serves all BBS users. No per-user setup needed.</i>"
         )
         notice.setStyleSheet("color:#b5bac1; font-size:9pt;")
@@ -160,7 +163,8 @@ class InboundEmailTab:
             "The domain part of email addresses that map to BBS callsigns.\n\n"
             "Emails to callsign@this-domain are delivered to the matching\n"
             "RF user. Other domains are ignored.\n\n"
-            "Example:  kk4oda@aetherbbs.example.com → KK4ODA"
+            "Example:  kk4oda@aetherbbs.example.com → KK4ODA\n"
+            "With plus-addressing:  you+kk4oda@gmail.com → KK4ODA"
         )
         rf.addRow("BBS Domain:", self.widgets["bbs_domain"])
 

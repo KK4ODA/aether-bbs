@@ -135,3 +135,29 @@ def test_a_config_change_during_a_poll_leaves_one_poll_timer(poller):
         assert len(mine) == 1
     finally:
         p.stop()
+
+
+def test_plus_addressing_tag_is_the_callsign():
+    """yourmail+kk4oda@gmail.com, as the Inbound Email page suggests, used
+    to map to nothing."""
+    f = inbound.extract_callsign_from_email
+    assert f("yourmail+kk4oda@gmail.com", "gmail.com") == "KK4ODA"
+    assert f("YourMail+KK4ODA-5@Gmail.com", "gmail.com") == "KK4ODA-5"
+    assert f("yourmail+kk4oda@other.org", "gmail.com") is None   # not our domain
+    assert f("yourmail@gmail.com", "gmail.com") is None
+    assert f("kk4oda@bbs.example.net", "bbs.example.net") == "KK4ODA"
+
+
+def test_tactical_address_is_reachable_by_email(poller):
+    f = inbound.extract_callsign_from_email
+    assert f("you+brecken@gmail.com", "gmail.com") is None        # no digit
+    assert f("you+brecken@gmail.com", "gmail.com", ("BRECKEN",)) == "BRECKEN"
+    p, store, _ = poller
+    p.update_config(enabled=True, protocol="IMAP", host="mail.invalid",
+                    bbs_domain="gmail.com")
+    p.set_tactical_addresses(["BRECKEN"])
+    from bbs.access import AccessController
+    p.set_access_controller(AccessController(store.conn, store.lock, AppConfig()))
+    raw = RAW.replace(b"kk4oda@bbs.example.net", b"you+brecken@gmail.com")
+    assert p._process_email(raw) is True       # no user role needed
+    assert store.list_messages(to_call="BRECKEN")[0]["subject"] == "hello"

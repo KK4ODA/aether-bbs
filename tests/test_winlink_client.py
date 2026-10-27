@@ -118,3 +118,114 @@ def test_queued_message_reaches_pat_compose(client, monkeypatch):
     assert c._send_queued_messages() == 1
     assert fed == ["héllo".encode()]
     assert store.get_message(mid)["cms_status"] == MessageStatus.SENT
+
+
+class _Compose:
+    """Stands in for `pat compose`: records each call's args and body."""
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, cmd, **kw):
+        calls = self.calls
+
+        class P:
+            returncode = 0
+            def communicate(self, input=None, timeout=None):
+                calls.append((cmd, input.decode()))
+                return b"", b""
+        return P()
+
+
+def _queue(store, frm, to, via_path=""):
+    from winlink.queue import route_new_message
+    mid = store.save_message(frm, to, "s", b"body", via_path=via_path)
+    route_new_message(store, mid, to, via_winlink=True)
+    return mid
+
+
+def test_gateway_sends_say_who_wrote_the_message(client, monkeypatch):
+    """Everything went out under the gateway callsign with no sign of the
+    user who wrote it."""
+    c, store = client
+    compose = _Compose()
+    monkeypatch.setattr(pc.subprocess, "Popen", compose)
+    c._pat_exe_path = sys.executable
+    _queue(store, "W1XYZ-7", "W1AW")
+    _queue(store, "EOC", "W1AW", via_path="W1XYZ-7")     # under a tactical
+    _queue(store, "KK4ODA", "W1AW")                      # the gateway's own
+    assert c._send_queued_messages() == 3
+    froms = [cmd[cmd.index("--from") + 1] for cmd, _ in compose.calls]
+    assert froms == ["KK4ODA"] * 3
+    bodies = [body for _, body in compose.calls]
+    assert bodies[0] == "From W1XYZ-7 via KK4ODA BBS\r\n\r\nbody"
+    assert bodies[1] == "From EOC (W1XYZ-7) via KK4ODA BBS\r\n\r\nbody"
+    assert bodies[2] == "body"
+
+
+def test_users_own_sync_sends_only_their_mail_from_their_call(client, monkeypatch):
+    c, store = client
+    compose = _Compose()
+    monkeypatch.setattr(pc.subprocess, "Popen", compose)
+    c._pat_exe_path = sys.executable
+    mine = _queue(store, "W1XYZ-7", "W1AW")
+    theirs = _queue(store, "N0RF", "W1AW")
+    assert c._send_queued_messages(as_user="W1XYZ") == 1
+    (cmd, body), = compose.calls
+    assert cmd[cmd.index("--from") + 1] == "W1XYZ" and body == "body"
+    assert store.get_message(mine)["cms_status"] == MessageStatus.SENT
+    assert store.get_message(theirs)["cms_status"] == MessageStatus.QUEUED
+
+
+def _settings(**kw):
+    s = dict(enabled=False, callsign="KK4ODA", password="", grid_square="",
+             pat_exe_path=sys.executable, pat_http_addr="127.0.0.1:1",
+             auto_launch_pat=True, forward_calls=[], cms_timeout=60)
+    s.update(kw)
+    return s
+
+
+def test_turning_winlink_on_and_off_needs_no_restart(client, monkeypatch):
+    """Pat and the inbox check were started only if Winlink was on when
+    the BBS started; Save only stored the settings."""
+    import time
+    c, _ = client
+    launched, stopped = [], []
+    monkeypatch.setattr(c, "_configure_pat", lambda: None)
+    monkeypatch.setattr(c, "_launch_pat", lambda: launched.append(c._pat_exe_path))
+    monkeypatch.setattr(c, "_stop_pat", lambda: stopped.append(1))
+    monkeypatch.setattr(pc, "INBOX_CHECK_INTERVAL", 0.05)
+    c.update_config(**_settings())
+    c.start()
+    try:
+        assert launched == [] and c._poll_thread is None
+
+        def settle(n):
+            deadline = time.time() + 5
+            while len(launched) < n and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.1)
+
+        c.update_config(**_settings(enabled=True))            # turned on
+        settle(1)
+        assert launched == [sys.executable] and c._poll_thread.is_alive()
+        c.update_config(**_settings(enabled=True, cms_timeout=90))
+        time.sleep(0.3)
+        assert len(launched) == 1                             # nothing to restart
+        c.update_config(**_settings(enabled=True, password="new"))
+        settle(2)
+        assert len(launched) == 2                             # restarted
+        n_stopped = len(stopped)
+        c.update_config(**_settings(enabled=False))           # turned off
+        time.sleep(0.3)
+        assert len(stopped) == n_stopped + 1 and len(launched) == 2
+    finally:
+        c.stop()
+
+
+def test_empty_pat_path_uses_the_pat_found(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(PatClient, "find_pat_exe", staticmethod(lambda: "/opt/pat/pat"))
+    c.update_config(**_settings(pat_exe_path=""))
+    assert c._pat_exe_path == "/opt/pat/pat"
+    c.update_config(**_settings(pat_exe_path="/usr/bin/pat"))
+    assert c._pat_exe_path == "/usr/bin/pat"

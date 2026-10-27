@@ -444,3 +444,123 @@ def test_link_drop_is_not_answered_with_a_timeout(bbs):
     u = Session("W1XYZ", cfg, store, bulletins)
     u.close()                                   # the link drops (feed_line(None))
     assert "Session timeout" not in "".join(u.out)
+
+
+# ── 1.3.9 ──────────────────────────────────────────────────────────────────
+
+def test_mailbox_includes_mail_for_the_base_callsign(bbs):
+    """Winlink mail is filed under the base callsign: a station connected
+    as KK4ODA-7 never saw it in L, U or the new-mail notice."""
+    cfg, store, bulletins = bbs
+    store.save_message("W1AW", "KK4ODA", "winlink mail", b"from the CMS")
+    store.save_message("W1AW", "KK4ODA-7", "for the ssid", b"x")
+    store.save_message("W1AW", "KK4ODA-5", "other ssid", b"x")
+    u = Session("KK4ODA-7", cfg, store, bulletins)
+    try:
+        login = "".join(u.out)
+        assert "You have 2 messages waiting" in login
+        listing = u.cmd("L")
+        assert "winlink mail" in listing and "for the ssid" in listing
+        assert "other ssid" not in listing
+        assert listing.count("winlink mail") == 1          # listed once
+        mine = u.cmd("U")
+        assert "winlink mail" in mine and "other ssid" not in mine
+        assert "2 new message(s)" in u.cmd("N")
+        from core.events import EventType
+        mid = store.save_message("W1AW", "KK4ODA", "while you are on", b"x")
+        u.s._bus.emit(EventType.MESSAGE_RECEIVED,
+                      data={"mid": mid, "to": "KK4ODA"})
+        assert "New messages arrived - 3 waiting" in u.cmd("A")
+    finally:
+        u.close()
+
+
+def test_wlreg_is_kept_for_the_base_call_and_old_entries_still_read(bbs):
+    cfg, store, _ = bbs
+    cfg.security.machine_secret = "s" * 64
+    # an entry 1.3.8 kept for the call with SSID is still found
+    with store.lock:
+        store.conn.execute(
+            "INSERT INTO user_prefs (callsign, winlink_registered, winlink_password)"
+            " VALUES ('KK4ODA-7', 1, 'ENC:old')")
+        store.conn.commit()
+    assert store.get_winlink_registration("KK4ODA-7") == (True, "ENC:old")
+    assert store.get_winlink_registration("KK4ODA-5") == (False, "")
+    # a new registration from any SSID is for the base call, like passwords
+    store.set_winlink_registered("KK4ODA-5", True, "pw")
+    for call in ("KK4ODA", "KK4ODA-5", "KK4ODA-7"):
+        registered, enc = store.get_winlink_registration(call)
+        assert registered and enc and enc != "ENC:old"
+    store.set_winlink_registered("KK4ODA-7", False)          # WLOFF
+    for call in ("KK4ODA", "KK4ODA-7"):
+        assert store.get_winlink_registration(call) == (False, "")
+
+
+def test_tactical_reply_says_how_winlink_mail_goes_out(bbs):
+    cfg, store, bulletins = bbs
+    from core.config import TacticalAddress
+    cfg.station.tactical_addresses = [TacticalAddress(callsign="EOC")]
+    u = Session("KK4ODA-7", cfg, store, bulletins)
+    try:
+        out = u.cmd("TACTICAL EOC")
+        assert "sent from EOC" not in out
+        assert "From EOC (KK4ODA-7)" in out
+        u.cmd("SW W1AW")
+        u.cmd("subject")
+        u.cmd(".")
+        msg = store.list_messages(to_call="W1AW")[0]
+        assert msg["from_call"] == "EOC"
+        assert store.get_message(msg["id"])["via_path"] == "KK4ODA-7"
+    finally:
+        u.close()
+
+
+def test_require_password_tells_the_user_to_ask_the_sysop(bbs):
+    from bbs.access import Role
+    cfg, store, bulletins = bbs
+    access, policy, limiter = _secured(cfg, store, "restricted")
+    cfg.security.require_password = True
+    cfg.station.sysop_callsign = "W9SYS"
+    access.set_role("W1XYZ", Role.APPROVED)
+    u = SecuredSession("W1XYZ", cfg, store, bulletins, access, policy, limiter)
+    try:
+        u.t.join(timeout=5)
+        text = "".join(u.out)
+        assert "Ask the sysop (W9SYS)" in text
+        assert "provisioned" not in text and "will be sent" not in text
+    finally:
+        u.close()
+
+
+def test_unknown_user_banner_box_lines_up(bbs):
+    cfg, store, bulletins = bbs
+    access, policy, limiter = _secured(cfg, store, "restricted")
+    u = SecuredSession("N0NEW", cfg, store, bulletins, access, policy, limiter)
+    try:
+        box = [l for l in "".join(u.out).split("\r\n") if l.startswith(" +")
+               or l.startswith(" |")]
+        assert len(box) == 3 and len({len(l) for l in box}) == 1
+    finally:
+        u.close()
+
+
+class _OneFile:
+    def get_file_meta(self, area, name): return {"filename": name}
+    def read_file(self, area, name): return b"hello"
+
+
+def test_fg_starts_after_the_cancel_window(bbs, monkeypatch):
+    """FG said "Type CANCEL within 10s" but waited the whole session
+    timeout (600 s) for a line before sending."""
+    import bbs.interactive as interactive
+    monkeypatch.setattr(interactive, "FG_CANCEL_WINDOW", 1)
+    cfg, store, bulletins = bbs
+    u = Session("W1XYZ", cfg, store, bulletins)
+    u.s._files = _OneFile()
+    try:
+        out = u.expect("FG GENERAL a.txt", "EOF a.txt", timeout=6)
+        assert "aGVsbG8=" in out
+        out = u.expect("FG GENERAL a.txt", "abort")
+        assert "cancelled" in u.expect("CANCEL", "cancelled")
+    finally:
+        u.close()

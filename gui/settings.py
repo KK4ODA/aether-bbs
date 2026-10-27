@@ -316,6 +316,8 @@ def restart_needed(old: AppConfig, new: AppConfig) -> list[str]:
     if (lo.level, lo.log_dir, lo.max_bytes, lo.backup_count) != \
             (ln.level, ln.log_dir, ln.max_bytes, ln.backup_count):
         areas.append("Logging (level, folder, file size)")
+    if old.bbs.max_sessions != new.bbs.max_sessions:
+        areas.append("Max Sessions")
     return areas
 
 
@@ -520,8 +522,10 @@ class SettingsTab(QScrollArea):
         self._tactical_table.setToolTip(
             "Callsigns that trigger priority alerts when a message\n"
             "is addressed to them (e.g. EMCOMM, SHELTER, WEATHER).\n"
-            "Advertise = include in APRS beacon for discovery.\n"
-            "Tactical addresses share the gateway Winlink password."
+            "Advertise = list it to RF users when they connect\n"
+            "and in the I (info) output.\n"
+            "WL checks a user's tactical address with that user's\n"
+            "own Winlink password (from WLREG)."
         )
         self._tactical_table.setHorizontalHeaderLabels(
             ["Callsign (max 8)", "Alert Phrase (spoken by TTS)", "Advertise"])
@@ -1446,8 +1450,12 @@ class SettingsTab(QScrollArea):
         conflicts: list[str] = []
         for d in self._inst_data:
             name = d["name"]
-            for port_key in ("cmd_port", "data_port"):
-                port = d[port_key]
+            # Soundmodem uses only its AGWPE port (its CMD/Data are hidden)
+            if d.get("transport", "").upper() == "SOUNDMODEM":
+                ports = (d.get("soundmodem", SoundmodemConfig()).port,)
+            else:
+                ports = (d["cmd_port"], d["data_port"])
+            for port in ports:
                 if port in seen:
                     conflicts.append(
                         f"Port {port}: {seen[port]} ↔ {name}"
@@ -1516,7 +1524,9 @@ class SettingsTab(QScrollArea):
         self._msg_age.setValue(cfg.max_message_age)
         self._msg_age.setSuffix(" days")
         self._msg_age.setToolTip(
-            "Messages older than this are automatically purged.\n"
+            "Messages are deleted this many days after they arrive\n"
+            "(checked at start-up and every 6 hours, or with Expire Old).\n"
+            "A change applies to messages that arrive after it.\n"
             "Keeps the mailbox manageable on limited storage."
         )
         self._max_sess = QSpinBox()
@@ -2724,9 +2734,10 @@ class SettingsTab(QScrollArea):
         self._sec_require_password = QCheckBox("Require password for approved users")
         self._sec_require_password.setChecked(sec.require_password)
         self._sec_require_password.setToolTip(
-            "When checked, approved users must set a password on first\n"
-            "login and authenticate on every subsequent connection.\n"
-            "Users who do not set a password will be disconnected."
+            "When checked, approved users must log in with a password on\n"
+            "every connection. A user without one is told to ask the sysop\n"
+            "for one and is disconnected: set it with Password in User\n"
+            "Management and send it to them off the air."
         )
         af.addRow("", self._sec_require_password)
 
@@ -2818,7 +2829,8 @@ class SettingsTab(QScrollArea):
         self._wl_pat_exe.setPlaceholderText("Path to pat.exe")
         self._wl_pat_exe.setToolTip(
             "Full path to the Pat executable (getpat.io).\n"
-            "Leave blank to auto-detect from PATH."
+            "Leave blank to use the Pat found on the PATH or in the\n"
+            "usual install folders (shown below)."
         )
         pat_browse = QPushButton("Browse...")
         pat_browse.clicked.connect(self._browse_pat_exe)
@@ -2836,7 +2848,8 @@ class SettingsTab(QScrollArea):
         self._wl_auto_launch = QCheckBox("Auto-launch Pat when BBS starts")
         self._wl_auto_launch.setChecked(cfg.auto_launch_pat)
         self._wl_auto_launch.setToolTip(
-            "Automatically start Pat as a subprocess when the BBS launches.\n"
+            "Automatically start Pat as a subprocess when the BBS launches\n"
+            "or Winlink is turned on.\n"
             "Uncheck if you run Pat separately or as a system service."
         )
 
@@ -2898,7 +2911,8 @@ class SettingsTab(QScrollArea):
             "This prevents consuming mail that users may want to\n"
             "retrieve via other Winlink gateways.\n"
             "\n"
-            "Changes take effect on next Save. Pat will be restarted if running."
+            "Changes take effect when you Save. With Auto-launch on,\n"
+            "Pat is started, stopped or restarted to match."
         )
         note.setStyleSheet("color:#aaa;font-size:9pt;")
         form.addRow("", note)
@@ -3090,7 +3104,7 @@ class SettingsTab(QScrollArea):
         self._pkt_log   = QCheckBox("Log decoded packet frames")
         self._pkt_log.setChecked(cfg.packet_log)
         self._pkt_log.setToolTip(
-            "Write decoded packet data to a separate packet.log file.\n"
+            "Write decoded packet data to a separate packet_frames.log file.\n"
             "Useful for diagnosing RF link issues. Disable in normal operation."
         )
 
