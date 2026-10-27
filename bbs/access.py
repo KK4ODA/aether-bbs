@@ -733,6 +733,25 @@ class AccessController:
         n_bl = len(fu.blocked_callsigns)
         log.info(f"ACCESS migrated {n_wl} whitelist + {n_bl} blocked entries")
 
+    def ensure_sysop_row(self, config=None) -> bool:
+        """Give the configured sysop callsign a SYSOP row in the user table
+        if it has none (a changed Sysop Callsign has none), so it is listed
+        in User Management and its password can be set there.  Called at
+        start-up and on every Settings save.  Returns True if one was made."""
+        cfg = config or self._cfg()
+        sysop = _base_call(cfg.station.sysop_callsign or "") if cfg else ""
+        if not sysop:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT role FROM access_control WHERE callsign=?", (sysop,),
+            ).fetchone()
+        if row and row[0] == Role.SYSOP.value:
+            return False
+        self.set_role(sysop, Role.SYSOP, changed_by="SYSTEM",
+                      reason="sysop_callsign")
+        return True
+
     # ── Audit ────────────────────────────────────────────────────────
 
     def audit(self, callsign: str, event: str, detail: str = "",

@@ -12,7 +12,7 @@ import logging
 import threading
 from typing import Optional
 
-from bbs.store import MessageStore
+from bbs.store import MessageStore, mailbox_calls
 
 # Sentinel pushed into _rx_queue by feed_line(None) to signal RF disconnect.
 # Distinct from None (queue timeout) so the session loop can tell them apart.
@@ -28,6 +28,8 @@ from core.config import AppConfig
 from core.events import EventBus, EventType
 
 log = logging.getLogger(__name__)
+
+FG_CANCEL_WINDOW = 10   # seconds after FILE in which CANCEL stops an FG
 
 HELP_TEXT = """\r
 Commands:\r
@@ -377,7 +379,7 @@ class InteractiveSession:
         self._send(
             "\r\n"
             " +--------------------------------------------------+\r\n"
-            " |   Aether BBS -- Access Restricted                  |\r\n"
+            " |   Aether BBS -- Access Restricted                |\r\n"
             " +--------------------------------------------------+\r\n"
             "\r\n"
             f"Hello {self.remote_call}.\r\n"
@@ -480,13 +482,15 @@ class InteractiveSession:
             return True
         if not self._access.has_password(self.remote_call):
             # If mode requires password but none set, inform and disconnect
+            # There is no way to set a first password over the air: the
+            # sysop sets one and sends it off the air
             if self._policy and self._policy.require_password:
-                base = self.remote_call.split("-")[0].upper()
+                sysop = self._config.station.sysop_callsign.split("-")[0].upper()
                 self._send(
                     "\r\n*** This BBS requires a password. ***\r\n"
-                    "Your password has not yet been provisioned.\r\n"
-                    f"It will be sent to you via Winlink ({base}@winlink.org)\r\n"
-                    "once your account has been approved by the sysop.\r\n"
+                    "You do not have one yet. Ask the sysop "
+                    f"({sysop}) for one,\r\n"
+                    "by Winlink, email, phone or in person.\r\n"
                     "Disconnecting now.\r\n"
                 )
                 time.sleep(0.5)
@@ -609,7 +613,10 @@ class InteractiveSession:
             self._send(f";TACTICAL OK {requested}\r\n")
         else:
             self._send(f"Tactical address set to {requested}\r\n")
-            self._send(f"WL will poll for {requested}. Outbound messages will be sent from {requested}.\r\n")
+            self._send(f"WL will poll for {requested}. Messages you send are "
+                       f"from {requested}.\r\n"
+                       f"Winlink mail goes out from the BBS gateway, headed "
+                       f"From {requested} ({self.remote_call}).\r\n")
             self._show_prompt()
 
     # ── Command dispatch ──────────────────────────────────────────────────
@@ -867,7 +874,7 @@ class InteractiveSession:
         import secrets as _sec
         nonce = _sec.token_hex(16)
         self._send(f";WLREG NONCE {nonce}\r\n")
-        self._send("Your terminal program (e.g. VARA Term) will prompt for "
+        self._send("Your terminal program (e.g. Aether Term) will prompt for "
                    "your Winlink password.\r\n")
 
         # Wait for encrypted response
@@ -927,13 +934,10 @@ class InteractiveSession:
         from core.crypto import decrypt_value
         machine = self._config.security.machine_secret or ""
 
-        # ── User's own Winlink credentials ─────────────────────────────
-        prefs = self._store.get_user_prefs(self.remote_call)
-        user_registered = prefs.get("winlink_registered", False)
-        user_pw = ""
-        if user_registered:
-            enc_pw = prefs.get("winlink_password", "")
-            user_pw = decrypt_value(enc_pw, machine) if enc_pw else ""
+        # ── User's own Winlink credentials (kept for the base call) ────
+        user_registered, enc_pw = self._store.get_winlink_registration(
+            self.remote_call)
+        user_pw = decrypt_value(enc_pw, machine) if enc_pw else ""
 
         # ── Tactical address shares the user's Winlink credentials ─────
         # Tactical addresses are aliases registered under the same
@@ -955,10 +959,11 @@ class InteractiveSession:
             return
 
         # ── Build poll addresses ───────────────────────────────────────
-        # Primary = user callsign
+        # Primary = user's base callsign (the Winlink account the WLREG
+        # password belongs to; Winlink mail is filed under it)
         # Extra = tactical address using the same password
         extra = []
-        primary_call = self.remote_call
+        primary_call = self.remote_call.split("-")[0]
         primary_pw = user_pw
         if self._tactical_call:
             extra.append((self._tactical_call, user_pw))
@@ -1122,6 +1127,8 @@ class InteractiveSession:
             subject=subject.strip(),
             body=body_text.encode("utf-8"),
             instance=self.instance_name,
+            # who is behind the tactical address (named in Winlink mail)
+            via_path=self.remote_call if self._tactical_call else "",
         )
         self._msgs_recv += 1
 
@@ -1144,7 +1151,8 @@ class InteractiveSession:
         if not picked:
             return
         idx, msg = picked
-        mine = self.remote_call in (msg["from_call"].upper(), msg["to_call"].upper())
+        mine = (msg["from_call"].upper() == self.remote_call
+                or msg["to_call"].upper() in mailbox_calls(self.remote_call))
         if not (mine or self._is_sysop):
             self._send("You can only delete your own messages.\r\n")
             self._show_prompt()
@@ -1387,8 +1395,7 @@ class InteractiveSession:
         self._show_prompt()
 
     def _cmd_my_messages(self):
-        msgs = self._store.list_messages(limit=100)
-        mine = [m for m in msgs if m["to_call"].upper() == self.remote_call]
+        mine = self._store.list_messages(limit=100, to_call=self.remote_call)
         if not mine:
             self._send("No messages for you.\r\n")
         else:
@@ -1722,7 +1729,7 @@ class InteractiveSession:
     def _on_message_received(self, event):
         """EventBus callback — set notify flag if the new message is for us."""
         to_call = (event.data or {}).get("to", "").upper()
-        if to_call == self.remote_call:
+        if to_call in mailbox_calls(self.remote_call):
             self._pending_notify.set()
 
     def _link_lost(self):
@@ -1739,10 +1746,9 @@ class InteractiveSession:
 
         Keepalive design
         ----------------
-        VARA FM supports a SESSIONTIMELIMIT command (sent during initialisation
-        in interface.py) that sets a hard cap on session length in minutes.
-        We send SESSIONTIMELIMIT 0 at startup to disable this cap so the BBS
-        session_timeout setting is the sole arbiter.
+        VARA FM has a SESSIONTIMELIMIT command that sets a hard cap on
+        session length in minutes.  The BBS does not send it, so VARA's own
+        setting applies; the BBS session_timeout only ends idle sessions.
 
         As a belt-and-suspenders measure, this loop also re-sends the prompt
         every VARA_KEEPALIVE_INTERVAL seconds.  This ensures some application
@@ -1888,12 +1894,15 @@ class InteractiveSession:
         crc     = f"{binascii.crc32(data) & 0xFFFFFFFF:08x}"
         encoded = base64.b64encode(data).decode("ascii")
 
-        # Announce the transfer — client can abort before data starts
+        # Announce the transfer — client can abort before data starts.
+        # Any other line, or 10 s of silence, starts it.
         self._send(
             f"\r\nFILE {filename} {size} {crc}\r\n"
             f"(Type CANCEL within 10s to abort)\r\n"
         )
-        reply = self._get_line(timeout=self._config.bbs.session_timeout)
+        reply = self._get_line(timeout=FG_CANCEL_WINDOW)
+        if self._link_down:
+            return
         if isinstance(reply, str) and reply.strip().upper() == "CANCEL":
             self._send("Transfer cancelled.\r\n")
             self._show_prompt()

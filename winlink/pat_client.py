@@ -126,12 +126,15 @@ class PatClient:
         forward_calls:   Optional[list[str]] = None,
         cms_timeout:     int    = 120,
     ):
-        """Update Pat configuration.  Can be called while running."""
+        """Update Pat configuration.  Can be called while running: then Pat
+        and the inbox check are started, stopped or restarted to match."""
+        before = self._pat_settings()
         self._enabled         = enabled
         self._callsign        = callsign.upper()
         self._password        = password
         self._grid_square     = grid_square
-        self._pat_exe_path    = pat_exe_path
+        # empty = the Pat that find_pat_exe() finds (PATH, usual folders)
+        self._pat_exe_path    = pat_exe_path or self.find_pat_exe()
         self._pat_http_addr   = pat_http_addr or "localhost:8080"
         self._auto_launch_pat = auto_launch_pat
         self._forward_calls   = forward_calls or []
@@ -149,6 +152,27 @@ class PatClient:
         self._seen_file = str(data_dir / ".pat_seen_ids")
         self._load_seen_ids()
 
+        if self._running and self._pat_settings() != before:
+            # Settings → Save: off a GUI thread (Pat takes seconds to
+            # start), and after any CMS sync in progress
+            threading.Thread(target=self._apply_change, daemon=True,
+                             name="Pat-Restart").start()
+
+    def _pat_settings(self) -> tuple:
+        """The settings Pat runs with: a change restarts it."""
+        return (self._enabled, self._callsign, self._password,
+                self._grid_square, self._pat_exe_path, self._pat_http_addr,
+                self._auto_launch_pat, tuple(self._forward_calls))
+
+    def _apply_change(self):
+        with self._lock:
+            if not self._running:
+                return
+            self._stop_pat()
+            if self._enabled:
+                self._bring_up()
+            log.info("Pat client settings applied (enabled=%s)", self._enabled)
+
     # ── Lifecycle ────────────────────────────────────────────────────────
 
     def start(self):
@@ -160,29 +184,7 @@ class PatClient:
             self._queue.rollback_sending()
 
         if self._enabled:
-            # Validate Pat installation
-            if not self._pat_exe_path:
-                log.warning("Winlink enabled but Pat executable path is empty — "
-                            "configure it in Settings > Winlink")
-            elif not os.path.isfile(self._pat_exe_path):
-                log.warning("Pat executable not found at: %s", self._pat_exe_path)
-                self._bus.emit(
-                    EventType.CMS_SESSION_ERROR, source="winlink",
-                    data={"error": f"Pat not found at {self._pat_exe_path}"},
-                )
-            else:
-                # Configure Pat's own config.json
-                if self._auto_launch_pat:
-                    self._configure_pat()
-
-                # Launch Pat if configured
-                self._launch_pat()
-
-            # Start inbox check thread (local only — CMS sync is on-demand)
-            self._poll_thread = threading.Thread(
-                target=self._poll_loop, daemon=True, name="Pat-InboxCheck",
-            )
-            self._poll_thread.start()
+            self._bring_up()
 
         log.info(
             "Pat client started (enabled=%s, exe=%s)",
@@ -190,11 +192,42 @@ class PatClient:
             self._pat_exe_path or "<not set>",
         )
 
+    def _bring_up(self):
+        """Configure and launch Pat, and start the inbox check (Winlink on)."""
+        # Validate Pat installation
+        if not self._pat_exe_path:
+            log.warning("Winlink enabled but Pat was not found — "
+                        "set the Pat Executable in Settings > Winlink")
+        elif not os.path.isfile(self._pat_exe_path):
+            log.warning("Pat executable not found at: %s", self._pat_exe_path)
+            self._bus.emit(
+                EventType.CMS_SESSION_ERROR, source="winlink",
+                data={"error": f"Pat not found at {self._pat_exe_path}"},
+            )
+        else:
+            # Configure Pat's own config.json
+            if self._auto_launch_pat:
+                self._configure_pat()
+
+            # Launch Pat if configured
+            self._launch_pat()
+
+        # Start inbox check thread (local only — CMS sync is on-demand);
+        # it idles while Winlink is off
+        if self._poll_thread is None or not self._poll_thread.is_alive():
+            self._poll_thread = threading.Thread(
+                target=self._poll_loop, daemon=True, name="Pat-InboxCheck",
+            )
+            self._poll_thread.start()
+
     def stop(self):
         """Stop the polling service and managed Pat process."""
         self._running = False
+        self._stop_pat()
+        log.info("Pat client stopped")
 
-        # Terminate Pat only if we launched it
+    def _stop_pat(self):
+        """Terminate Pat, only if we launched it."""
         if self._managed and self._pat_proc and self._pat_proc.poll() is None:
             log.info("Stopping managed Pat process (PID %d)", self._pat_proc.pid)
             self._pat_proc.terminate()
@@ -204,8 +237,6 @@ class PatClient:
                 self._pat_proc.kill()
             self._pat_proc = None
             self._managed = False
-
-        log.info("Pat client stopped")
 
     # ── Public polling interface (compatible with CMSPoller) ─────────────
 
@@ -268,6 +299,7 @@ class PatClient:
             # and share the user's password.
             path = self._pat_config_path()
             original_config = None
+            as_user = ""
             if path and os.path.isfile(path):
                 with open(path, "r") as f:
                     original_config = f.read()
@@ -296,9 +328,12 @@ class PatClient:
 
                 with open(path, "w") as f:
                     json.dump(pcfg, f, indent=2)
+                # logged in as the user: their own messages can go out
+                # from their callsign
+                as_user = user_call.split("-")[0]
 
             try:
-                result = self._exchange_with_retry()
+                result = self._exchange_with_retry(as_user=as_user)
             finally:
                 # Always restore original config
                 if original_config is not None and path:
@@ -736,14 +771,15 @@ class PatClient:
         finally:
             self._lock.release()
 
-    def _exchange_with_retry(self) -> PollResult:
-        """Run CMS sync + inbox check with exponential backoff retry."""
+    def _exchange_with_retry(self, as_user: str = "") -> PollResult:
+        """Run CMS sync + inbox check with exponential backoff retry.
+        *as_user*: see _send_queued_messages."""
         last_error = None
 
         for attempt in range(MAX_RETRIES):
             try:
                 # Send queued outbound messages
-                sent = self._send_queued_messages()
+                sent = self._send_queued_messages(as_user=as_user)
 
                 # Sync with CMS
                 synced = self._sync_cms()
@@ -775,12 +811,24 @@ class PatClient:
         log.error("Pat exchange failed after %d attempts: %s", MAX_RETRIES, last_error)
         return PollResult(error=last_error)
 
-    def _send_queued_messages(self) -> int:
-        """Send all queued outbound messages through Pat."""
+    def _send_queued_messages(self, as_user: str = "") -> int:
+        """Send queued outbound messages through Pat.
+
+        The CMS accepts a message only from an address the login owns.
+        *as_user* is the base callsign of a user whose own Winlink account
+        this sync logs in to (their ``WL``): only their messages are sent,
+        from their callsign.  Otherwise (Poll Now, logged in as the gateway)
+        every queued message goes from the gateway callsign, with a first
+        line naming who wrote it.
+        """
         if not self._queue:
             return 0
 
-        messages = self._queue.get_cms_outbound(limit=25)
+        messages = self._queue.get_cms_outbound(limit=200 if as_user else 25)
+        if as_user:
+            messages = [m for m in messages
+                        if (m.get("from_call") or "").upper().split("-")[0]
+                        == as_user][:25]
         if not messages:
             return 0
 
@@ -795,7 +843,12 @@ class PatClient:
 
             self._queue.mark_sending(mid)
 
-            result = self._compose_message(to_call, subject, body)
+            if as_user:
+                result = self._compose_message(to_call, subject, body,
+                                               from_addr=as_user)
+            else:
+                result = self._compose_message(to_call, subject,
+                                               self._attributed(msg, body))
             if result.success:
                 self._queue.mark_sent(mid)
                 sent += 1
@@ -808,6 +861,20 @@ class PatClient:
                 self._queue.mark_failed(mid, result.error)
 
         return sent
+
+    def _attributed(self, msg: dict, body: str) -> str:
+        """*body* with a first line naming the writer, for a message that
+        goes out from the gateway callsign on someone else's behalf:
+        "From KK4ODA-7 via W1AW-10 BBS", or "From EOC (KK4ODA-7) via
+        ..." when it was sent under a tactical address."""
+        who = (msg.get("from_call") or "").upper()
+        if not who or who.split("-")[0] == self._callsign.split("-")[0]:
+            return body
+        op = (msg.get("via_path") or "").upper()   # the user behind a tactical
+        if op and op != who and "@" not in op and ":" not in op:
+            who = f"{who} ({op})"
+        via = f"{self._callsign} BBS" if self._callsign else "the BBS"
+        return f"From {who} via {via}\r\n\r\n{body}"
 
     # ── Seen-IDs persistence ─────────────────────────────────────────────
 

@@ -156,6 +156,7 @@ class WinlinkPanel(QWidget):
         self._bus.subscribe(EventType.CMS_SESSION_ERROR,   self._on_session_error)
         self._bus.subscribe(EventType.CMS_MESSAGE_SENT,    self._on_message_sent)
         self._bus.subscribe(EventType.CMS_MESSAGE_RECEIVED,self._on_message_received)
+        self._bus.subscribe(EventType.CONFIG_CHANGED,      self._on_config_changed)
 
     # ── Event handlers (run in background threads → signal to GUI) ───────
 
@@ -183,6 +184,12 @@ class WinlinkPanel(QWidget):
     def _on_message_received(self, event: Event):
         self._update_signal.emit({"action": "msg_received", "data": event.data})
 
+    def _on_config_changed(self, event: Event):
+        cfg = (event.data or {}).get("config")
+        if cfg is not None:     # Winlink turned on or off in Settings
+            self._update_signal.emit({"action": "enabled",
+                                      "data": {"enabled": cfg.winlink.enabled}})
+
     # ── GUI thread updates ───────────────────────────────────────────────
 
     @pyqtSlot(dict)
@@ -190,7 +197,11 @@ class WinlinkPanel(QWidget):
         action = update.get("action", "")
         data = update.get("data") or {}
 
-        if action == "poll_started":
+        if action == "enabled":
+            if data.get("enabled") != self._enabled:
+                self.set_enabled(bool(data.get("enabled")))
+
+        elif action == "poll_started":
             mode = data.get("mode", "poll")
             client = data.get("client_call", "")
             if mode == "gateway" and client:

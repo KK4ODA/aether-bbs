@@ -53,15 +53,20 @@ _CALLSIGN_RE = re.compile(
 )
 
 
-def extract_callsign_from_email(address: str, domain: str = "") -> Optional[str]:
+def extract_callsign_from_email(address: str, domain: str = "",
+                                tactical: tuple[str, ...] = ()) -> Optional[str]:
     """
     Extract a callsign from an email address local part.
 
     Mapping rules:
-      kk4oda@yourbbs.net     → KK4ODA
-      kk4oda-5@yourbbs.net   → KK4ODA-5
-      w1abc@yourbbs.net      → W1ABC
-      john.smith@gmail.com   → None (not a callsign)
+      kk4oda@yourbbs.net         → KK4ODA
+      kk4oda-5@yourbbs.net       → KK4ODA-5
+      w1abc@yourbbs.net          → W1ABC
+      yourmail+kk4oda@gmail.com  → KK4ODA (plus-addressing: the tag)
+      john.smith@gmail.com       → None (not a callsign)
+
+    A configured *tactical* address (no digit needed) maps too:
+    yourmail+eoc@gmail.com → EOC.
 
     If domain is specified, only addresses matching that domain are
     considered.  Addresses at other domains return None.
@@ -75,11 +80,17 @@ def extract_callsign_from_email(address: str, domain: str = "") -> Optional[str]
     if domain and addr_domain.lower() != domain.lower():
         return None
 
+    # Plus-addressing (you+CALLSIGN@gmail.com): the tag is the callsign
+    if "+" in local_part:
+        local_part = local_part.split("+", 1)[1]
+
     # Clean the local part — replace dots/underscores with hyphens
     cleaned = local_part.replace(".", "-").replace("_", "-").upper()
 
     # Check if it matches a callsign pattern
     if _CALLSIGN_RE.match(cleaned):
+        return cleaned
+    if cleaned and cleaned in {t.upper() for t in tactical if t}:
         return cleaned
 
     return None
@@ -155,6 +166,8 @@ class InboundEmailPoller:
 
         # Access controller reference for callsign validation
         self._access_controller = None
+        # Tactical addresses (Settings → Station) that email may reach
+        self._tactical: tuple[str, ...] = ()
 
     def update_config(
         self,
@@ -194,6 +207,11 @@ class InboundEmailPoller:
     def set_access_controller(self, ac) -> None:
         """Inject the access controller for callsign validation."""
         self._access_controller = ac
+
+    def set_tactical_addresses(self, calls: list[str]) -> None:
+        """The station's tactical addresses: email to one is stored for it
+        (no user role needed; it raises the priority alert)."""
+        self._tactical = tuple(c.upper() for c in calls if c)
 
     def start(self):
         self._running = True
@@ -481,10 +499,11 @@ class InboundEmailPoller:
         # Map recipients to callsigns
         target_callsigns = []
         for addr in all_recipients:
-            callsign = extract_callsign_from_email(addr, self._bbs_domain)
+            callsign = extract_callsign_from_email(addr, self._bbs_domain,
+                                                   self._tactical)
             if callsign:
                 # Validate the callsign is a registered user (if AC available)
-                if self._access_controller:
+                if self._access_controller and callsign not in self._tactical:
                     from bbs.access import Role
                     role = self._access_controller.get_role(callsign)
                     if role in (Role.BLOCKED, Role.UNKNOWN):

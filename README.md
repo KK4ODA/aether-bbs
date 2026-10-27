@@ -43,7 +43,6 @@ delivery.
 - Sysop-to-user private chat (`CH` command)
 - Multi-user chat rooms / converse mode (`CHAT` command, BPQ32-style)
 - Room commands: `/WHO`, `/ROOM`, `/EXIT`
-- Sysop GUI participation in chat rooms
 
 ### Security
 - HMAC-SHA256 challenge-response authentication (password never sent over RF)
@@ -167,14 +166,15 @@ bandwidth = 0               # 0 = Aether's own setting; or 500 / 2300
 
 [[instances]]
 name = "Packet"
-transport = "SOUNDMODEM"
+transport = "SOUNDMODEM"    # uses only its AGWPE port, not cmd_port/data_port
 [instances.soundmodem]
 protocol = "AGWPE"
 host = "127.0.0.1"
 port = 8000
 ```
 
-Ports must be unique across enabled instances.
+Ports must be unique across enabled instances (for a Soundmodem instance, its AGWPE
+`port`).
 
 ## Bulletin forwarding
 

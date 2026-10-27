@@ -158,7 +158,7 @@ the details are in [Updating](../README.md#updating) in the README.
 Settings are in the **Settings** tab. The left sidebar lists the pages; nothing takes
 effect until you press **💾 Save Settings** at the bottom. **↩ Revert** throws away
 unsaved edits. Most settings apply on Save without a restart; the Save dialog tells you
-when one needs a restart (log level, log folder).
+when one needs a restart (log level, log folder, Max Sessions).
 
 ### 3.1 Station
 
@@ -176,12 +176,10 @@ when one needs a restart (log level, log folder).
 **Tactical Addresses** (same page) is a table of *Callsign (max 8)*, *Alert Phrase* and
 *Advertise*. A message addressed to one of these calls opens a priority alert on the
 sysop's screen, speaks the phrase, and sends push notifications (see
-[8.4](#84-priority-alerts)). Advertised ones are listed to RF users after they connect.
+[8.4](#84-priority-alerts)). Advertised ones are listed to RF users after they connect
+and in the `I` output.
 RF users can also adopt a tactical address for their session with `TACTICAL`
-([9.5](#95-tactical-addresses)).
-
-> A new settings file contains one tactical address, `BRECKEN`. Remove it or replace it
-> with your own (**✕ Remove**).
+([9.5](#95-tactical-addresses)). A new settings file has none.
 
 ### 3.2 BBS
 
@@ -191,8 +189,8 @@ RF users can also adopt a tactical address for their session with `TACTICAL`
 |---|---|---|
 | Welcome Message | `Welcome to the Aether BBS. Type H for help.` | Sent after connect |
 | Session Timeout | 600 s (30–3600) | Idle time at the prompt before the BBS says `Session timeout. 73 de BBS.` and disconnects. EMCOMM mode caps it at 120 s. |
-| Message Max Age | 30 days | Expiry date given to every new message, and to bulletins in areas without their own Max Age. Expired items are removed only when you press **🗑 Expire Old** in the Messages tab. |
-| Max Sessions | 1 (1–16) | Concurrent sessions across all instances. Others get `*** BBS BUSY ***`. Read at start-up: restart after changing it. Values above 1 share a message store that is not transaction-isolated. |
+| Message Max Age | 30 days | Expiry date given to every new message, and to bulletins in areas without their own Max Age. Expired items are removed at start-up and every 6 hours, or at once with **🗑 Expire Old** in the Messages tab. A change applies to messages that arrive after it. |
+| Max Sessions | 1 (1–16) | Concurrent sessions across all instances. Others get `*** BBS BUSY ***`. Read at start-up: restart after changing it (Save says so). Values above 1 share a message store that is not transaction-isolated. |
 | Session Watchdog | 1800 s | Any session older than this is force-disconnected |
 | Connect Banner | on | ASCII banner with station, sysop, grid and frequency label |
 
@@ -230,8 +228,8 @@ There is no Host field in this form: the modem host is `127.0.0.1` unless you se
 the instance in `aether_bbs.toml` ([chapter 12](#12-configuration-file-reference)).
 
 Port numbers must be unique across all instances; the form shows a red warning and Save
-refuses while two instances share a port. This includes the hidden CMD/Data ports of a
-Soundmodem instance.
+refuses while two instances share a port. A Soundmodem instance counts only its AGWPE
+port (its CMD/Data ports are not used).
 
 Saving applies instance changes at once: removed or disabled instances stop, changed ones
 restart (on a change of transport, ports, exe path, host, Soundmodem or Aether settings,
@@ -487,6 +485,10 @@ Last Auth, Failures, Notes) with a role filter and **🔄 Refresh**. Select a ro
 | **🔓 Reset Auth** | Clear the failure counter |
 | **🗑 Delete** | Remove the user (not the sysop). They are UNKNOWN on next connect. |
 
+The Sysop Callsign is always in the list (it is added at start-up and when you save
+Settings, for example after changing it), so you can give it a password with
+**🔑 Password**.
+
 After **Add User** (with a password) or **🔑 Password**, a dialog shows a ready-made
 message to `<CALL>@winlink.org` with the credentials, and **📋 Copy Message** /
 **🔑 Copy Password Only**. The BBS does not send it for you: send it yourself by Winlink
@@ -494,8 +496,10 @@ message to `<CALL>@winlink.org` with the credentials, and **📋 Copy Message** 
 person. Never over RF in the clear.
 
 Approving a user does not give them a password. With *Require password* on (the default)
-an approved user without one is told the password has not been provisioned and is
-disconnected, so approve **and** provision.
+an approved user without one is told `You do not have one yet. Ask the sysop (<CALL>) for
+one, by Winlink, email, phone or in person.` and is disconnected, so approve **and**
+provision. There is no way to set a first password over the air: `SETPASS` works only
+once logged in.
 
 ### 5.5 Passwords and authentication
 
@@ -504,7 +508,7 @@ disconnected, so approve **and** provision.
 | Setting | Default | Meaning |
 |---|---|---|
 | Require registration for new callsigns | on | Restricted mode only (see 5.2) |
-| Require password for approved users | on | Users without a password are disconnected. Always on in EMCOMM. |
+| Require password for approved users | on | Users without a password are told to ask the sysop for one and disconnected. Always on in EMCOMM. |
 | Allow plaintext password fallback | on | Accept a typed password. Anyone listening can read it. Off = HMAC only. |
 
 Passwords belong to the base callsign. Users can change theirs with `SETPASS` (at least 4
@@ -572,8 +576,9 @@ Private Message** from the sysop, stores it at the BBS for the addressee to coll
 RF. A message to an internet address, or one sent with `SW` / *Send via Winlink*, is
 queued for Winlink instead ([chapter 7](#7-winlink-via-pat)).
 
-Mail is matched to the callsign exactly as the station connects, SSID included. Mail
-received from Winlink is filed under the base callsign (no SSID).
+A station's mailbox holds mail addressed to its callsign exactly as it connects and to
+its base callsign: KK4ODA-7 sees mail to KK4ODA-7 and to KK4ODA (where Winlink mail is
+filed), but not mail to KK4ODA-5.
 
 ### 6.2 Bulletins and areas
 
@@ -582,7 +587,8 @@ user. **Settings → Bulletins** defines the areas (Area Name, Description, Max 
 Enabled) with **+ Add Area** / **− Remove Selected**. The defaults are ALL, WX, LOCAL and
 DX, 14 days each. A user posting to a group that is not a configured, enabled area is
 warned and asked to confirm. A bulletin expires after its area's Max Age (or Message Max
-Age if the area is not configured); expired items are removed with **🗑 Expire Old**.
+Age if the area is not configured); expired items are removed at start-up and every 6
+hours, or at once with **🗑 Expire Old**.
 
 `SUB` posts an urgent bulletin (marked `!` in `LB`). Bulletins in the *Urgent areas* list
 (**Settings → Notifications**, default EMCOMM, WX, ARES) count as urgent too. Users are told
@@ -653,9 +659,9 @@ Install Pat, then **Settings → Winlink (Pat)**:
 | Field | Default | Notes |
 |---|---|---|
 | Enable Winlink Integration (via Pat) | off | |
-| Pat Executable | empty | Full path to Pat. The status line under it shows `Pat <version>`, `Pat found at: …` or `Pat not found`. Pat does not start until this path is set. |
+| Pat Executable | empty | Full path to Pat. Empty: the Pat found on the PATH or in the usual install folders is used. The status line under it shows `Pat <version>`, `Pat found at: …` or `Pat not found`. |
 | Pat HTTP Address | `localhost:8080` | Pat's web/API address |
-| Auto-launch Pat when BBS starts | on | Starts `pat http --addr …` unless Pat already answers there |
+| Auto-launch Pat when BBS starts | on | Starts `pat http --addr …` (at start-up, or when you turn Winlink on) unless Pat already answers there |
 | **Test Pat Connection** | | Asks Pat's API for its inbox |
 | Callsign | empty | The gateway (station) Winlink account, e.g. `KK4ODA-5` |
 | Password | empty | That account's Winlink password, stored encrypted |
@@ -663,15 +669,17 @@ Install Pat, then **Settings → Winlink (Pat)**:
 | Forward For | empty | Extra callsigns to fetch mail for (Pat's auxiliary addresses) |
 | CMS Timeout | 120 s (30–600) | Limit for one `pat connect` |
 
-With *Auto-launch Pat* on, the BBS writes into Pat's `config.json` at start-up: `mycall`,
+With *Auto-launch Pat* on, the BBS writes into Pat's `config.json` when it starts Pat: `mycall`,
 `secure_login_password`, `locator`, `http_addr`, `auxiliary_addresses` (Forward For), a
 `telnet` connect alias if missing, and an empty `schedule` (the BBS decides when to sync).
 It looks for that file at `%LOCALAPPDATA%\pat\config.json`, `~/.wl2k/config.json`, then
 next to the Pat executable. If you also use this Pat for your own mail, keep that in mind,
 or turn auto-launch off and run Pat yourself.
 
-Pat is started, and the inbox check begins, when the BBS starts with Winlink enabled.
-After enabling Winlink for the first time, restart Aether BBS.
+Saving applies these settings at once: turning Winlink on starts the inbox check and (with
+*Auto-launch Pat* on) Pat, turning it off stops Pat, and a change to the Pat or account
+settings restarts Pat (after any sync in progress). Only a Pat the BBS started itself is
+stopped or restarted.
 
 ### 7.2 How mail flows
 
@@ -681,6 +689,16 @@ to an address containing `@`, or the sysop ticks *Send via Winlink*. It then sho
 the BBS hands up to 25 of them to Pat (`pat compose`), then runs `pat connect telnet`.
 A message Pat accepted is marked *Sent*; one that fails five times is marked *Failed*.
 Messages sent while there is no internet stay queued in Pat until a later sync succeeds.
+
+**Who a message is from.** The CMS takes a message only from an address the account that
+logged in owns. **Poll Now** logs in as the gateway callsign, so it sends every queued
+message from the gateway callsign; one written by someone else starts with a line naming
+them, such as `From KK4ODA-7 via W1AW-10 BBS`, or `From EOC (KK4ODA-7) via W1AW-10 BBS`
+for a message sent under a tactical address. A user's own `WL` ([7.3](#73-per-user-winlink-wlreg-wl-wloff))
+logs in to their own Winlink account and sends their queued messages from their own base
+callsign, with no such line. A reply to a message sent from the gateway callsign comes
+back to the gateway, not to the writer; the first line tells the recipient whom to write
+to instead.
 
 **When a sync runs.** Only on demand:
 
@@ -694,8 +712,8 @@ collect through another Winlink gateway. A sync is tried up to 3 times (waiting 
 
 **Inbound.** Every 15 seconds the BBS reads Pat's local inbox through its HTTP API (this
 never contacts the CMS). New messages are stored for the base callsign they are addressed
-to, and tagged `[WL]` in the user's `L` list. A user connected under exactly that
-callsign is told at the next prompt.
+to, and tagged `[WL]` in the user's `L` list. A user connected under that callsign (any
+SSID) is told at the next prompt.
 
 ### 7.3 Per-user Winlink: WLREG, WL, WLOFF
 
@@ -705,10 +723,13 @@ A user who wants their own Winlink mail through the BBS:
 2. Types `WLREG`. The BBS sends `;WLREG NONCE <32 hex>`; the terminal program asks for the
    user's Winlink password and sends it back encrypted with a key derived from the BBS
    password and the nonce (`;WLREG <hex>`). Typing anything else cancels. The Winlink
-   password is stored encrypted, for the callsign exactly as connected (SSID included).
+   password is stored encrypted, for the base callsign (like the BBS password, every
+   SSID shares it). A registration stored by 1.3.8 or earlier for a callsign with SSID is
+   still used.
 3. Types `WL` whenever they want mail. The BBS temporarily switches Pat's identity to the
-   user's callsign and Winlink password, adds their active tactical address if they set
-   one, runs a sync (30–120 s), restores Pat's configuration, and reports
+   user's base callsign and Winlink password, adds their active tactical address if they
+   set one, sends the user's own queued messages from their base callsign, runs a sync
+   (30–120 s), restores Pat's configuration, and reports
    `Winlink sync complete: n sent, n new messages received.` Only one sync runs at a time;
    a second gets `CMS sync already in progress. Try again shortly.`
 4. `WLOFF` turns it off again.
@@ -737,14 +758,18 @@ pickup. Replies from RF users to internet addresses go out through Winlink.
 | Username / Password | empty | Password stored encrypted |
 | Folder | INBOX | IMAP only |
 | **Test Connection**, **Poll Now** | | |
-| BBS Domain | empty | Only addresses at this domain are mapped. `kk4oda@your.domain` → KK4ODA, `kk4oda-5@…` → KK4ODA-5 |
+| BBS Domain | empty | Only addresses at this domain are mapped. `kk4oda@your.domain` → KK4ODA, `kk4oda-5@…` → KK4ODA-5, `you+kk4oda@gmail.com` → KK4ODA (with `gmail.com`) |
 | Poll every | 5 min | |
 | Max size | 50 KB | Longer bodies are truncated |
 | Delete emails from server after processing | off | Off: marked read (IMAP) or left (POP3) |
 | Allowed senders | empty (all) | One address or domain per line |
 
-The local part of the address must look like a callsign, and the callsign must have a
-role other than UNKNOWN or BLOCKED; other mail is skipped. The same email fetched twice is
+The local part of the address (or, with plus-addressing, the part after `+`, so one Gmail
+inbox can serve everyone: set BBS Domain to `gmail.com` and give users
+`youraccount+CALLSIGN@gmail.com`) must look like a callsign, and the callsign must have a
+role other than UNKNOWN or BLOCKED; other mail is skipped. Case does not matter. A tactical
+address from **Settings → Station** is reached the same way (`youraccount+EOC@gmail.com`)
+and raises its priority alert ([8.4](#84-priority-alerts)). The same email fetched twice is
 stored once.
 
 ### 8.2 APRS-IS
@@ -864,7 +889,7 @@ Numbers in `R`, `K`, `RB` and `KB` refer to the last `L` or `LB` list.
 
 | Command | What it does |
 |---|---|
-| `L [area]` | List your messages (`*` = unread, `[WL]` = Winlink). The sysop sees all. |
+| `L [area]` | List your messages: to your callsign as connected and to your base callsign (`*` = unread, `[WL]` = Winlink). The sysop sees all. |
 | `R <n>` | Read message n |
 | `S <call>` | Send a message held at the BBS for that station to collect |
 | `S user@domain` | Send to an internet address (always via Winlink) |
@@ -900,10 +925,10 @@ Posting needs TRUSTED in Restricted mode, APPROVED in Open mode, SYSOP in EMCOMM
 | `FP <area> <file> [description]` | Upload a file |
 | `FD <area> <file>` | Delete a file you uploaded (sysop: any) |
 
-Downloads start with `FILE <name> <size> <crc32>`. The BBS then waits for your next line:
-`CANCEL` aborts, anything else (Enter) starts the transfer. The file follows as base64
-lines of 60 characters, then `EOF <name>`. The CRC-32 is of the original bytes, as 8
-lowercase hex digits.
+Downloads start with `FILE <name> <size> <crc32>` and `(Type CANCEL within 10s to abort)`.
+`CANCEL` within 10 s aborts; any other line, or 10 s of silence, starts the transfer. The
+file follows as base64 lines of 60 characters, then `EOF <name>`. The CRC-32 is of the
+original bytes, as 8 lowercase hex digits.
 
 Uploads: after `FP`, the BBS says it is ready; your program sends
 `PUTFILE <area> <file> <size> <crc32> [description]`, waits for `GO`, sends base64 lines,
@@ -954,7 +979,9 @@ login as *Alert addresses*. `S <address>` sends a message there and alerts the s
 
 `TACTICAL <address>` (one the BBS has configured) makes it your identity for the session:
 messages you send with `S`/`SW` are stored as from that address, and `WL` checks Winlink for
-it as well as your own call, using your Winlink password. `TACTICAL OFF` clears it.
+it as well as your own call, using your Winlink password. By Winlink such a message goes
+out from the BBS's gateway callsign, starting `From <address> (<your call>) via <gateway>
+BBS` ([7.2](#72-how-mail-flows)). `TACTICAL OFF` clears it.
 
 ---
 
@@ -1029,15 +1056,15 @@ Log level and folder changes need a restart. A crash during start-up writes `cra
 | `reports MISSING SOUNDCARD` | The modem cannot open its sound card. Fix the audio device in the modem's own setup. |
 | `Is Aether HF running with 'Host programs' on` | See [AETHER_HF.md §6](AETHER_HF.md#6-troubleshooting). |
 | TCP light green, calls not answered | Another program holds the modem's host port, or init failed (see WRONG). For Aether HF check the card's warnings. |
-| `Port … is used by more than one enabled instance` | Two enabled instances share a port (Soundmodem instances included). Change one. |
+| `Port … is used by more than one enabled instance` | Two enabled instances share a port (for a Soundmodem instance, its AGWPE port). Change one. |
 | `Soundmodem over KISS is not supported` | Set the protocol to AGWPE and the port to the program's AGWPE port (8000). |
 | `AGWPE connect failed, retrying` | Soundmodem/Direwolf is not running or its AGWPE server is off. The BBS keeps retrying. |
-| `Winlink enabled but Pat executable path is empty` | Set *Pat Executable* and restart. |
+| `Winlink enabled but Pat was not found` | No *Pat Executable* is set and none was found on the PATH or in the usual folders. Set it and Save. |
 | `Pat executable not found at: …` | Fix the path. |
 | `Pat exited immediately` / panel shows `Pat not running` | Run Pat by hand to see its error; check that nothing else uses the Pat HTTP address. |
 | `No internet — Pat sync skipped` / status bar `NET: DOWN` | The BBS cannot reach 8.8.8.8:53. Winlink and email wait; RF users are told on connect. |
 | `CMS sync failed` / `Pat connect failed` | Check the Winlink callsign and password, and the CMS Timeout on slow links. |
-| An approved user is disconnected with *password has not yet been provisioned* | Give them a password (**🔑 Password**) and send it. |
+| An approved user is disconnected with *You do not have one yet. Ask the sysop* | Give them a password (**🔑 Password**) and send it. |
 | A user cannot log in | Look at *Failures* in User Management; **🔓 Reset Auth**. If BLOCKED, set a role again. |
 | RF uploads always refused | In Whitelist mode the whitelist must list the caller (sysop included). Check the role needed for the mode and the area's RF-upload switch. |
 | `*** BBS BUSY ***` | Another session is active and Max Sessions is 1. |
@@ -1062,7 +1089,7 @@ password) is encrypted at the next start. Below are the main keys and defaults.
 | `latitude`, `longitude` | unset |
 | `beacon_interval` | `10` (minutes, 0 = off) |
 | `beacon_text` | `"Aether BBS"` |
-| `[[station.tactical_addresses]]` | `callsign` (max 8), `alert_phrase` (`"Priority message received"`), `advertised` (`true`), `winlink_password`. Default: one entry, `BRECKEN`. |
+| `[[station.tactical_addresses]]` | `callsign` (max 8), `alert_phrase` (`"Priority message received"`), `advertised` (`true`), `winlink_password`. Default: none. |
 
 **`[bbs]`**
 
@@ -1089,7 +1116,7 @@ password) is encrypted at the next start. Below are the main keys and defaults.
 | `frequency_label` | `""` | |
 | `executable_path` | `""` | |
 | `host` | `"127.0.0.1"` | Not in the GUI |
-| `cmd_port`, `data_port` | `8300`, `8301` | 1024–65535; must differ; unique across enabled instances (Soundmodem too) |
+| `cmd_port`, `data_port` | `8300`, `8301` | 1024–65535; must differ; unique across enabled instances. Not used by Soundmodem instances (their `soundmodem.port` counts instead). |
 | `auto_start` | `false` | |
 | `auto_restart`, `restart_delay` | `true`, `10` | Restart a modem program the BBS started if it exits (not in the GUI) |
 | `default_path` | `""` | |
@@ -1152,6 +1179,4 @@ encrypted), `grid_square` (`""`), `forward_calls` (`[]`), `pat_exe_path` (`""`),
 (`"KK4ODA/aether-bbs"`), `skipped_version` (`""`).
 
 Example instance blocks for each transport are in
-[Transport Configuration](../README.md#transport-configuration) in the README. Note that
-a Soundmodem instance there needs its own unused `cmd_port`/`data_port` (see
-[3.3](#33-adding-a-modem-instance)), or it clashes with an instance on 8300/8301.
+[Transport Configuration](../README.md#transport-configuration) in the README.

@@ -107,6 +107,8 @@ class BBSApplication:
         )
         # Migrate upload whitelist → role-based access control (one-time)
         self.access_controller.migrate_from_whitelist(self.config)
+        # The sysop callsign always has a row (its password is set there)
+        self.access_controller.ensure_sysop_row(self.config)
 
         self.mode_policy = ModePolicy(self.config)
         self.rate_limiter = RateLimiter(
@@ -231,6 +233,8 @@ class BBSApplication:
 
     def _start_services(self):
         """Start the background services."""
+        # expired messages and bulletins: now, then every few hours
+        self.message_store.start_auto_expiry()
         self.instance_manager.start_all()
         self.dispatcher.start()
         self.bulletin_forwarder.start()
@@ -320,6 +324,9 @@ class BBSApplication:
     def _apply_internet_email(self, cfg):
         """Push the inbound email settings in (at startup, and live on
         every Save)."""
+        # email to a tactical address reaches it too
+        self.inbound_email.set_tactical_addresses(
+            [ta.callsign for ta in cfg.station.tactical_addresses])
         ie = cfg.outbound_delivery.inbound_email
         if ie == self._inbound_applied:
             return          # unchanged: keep the poll timer as it is
@@ -370,6 +377,8 @@ class BBSApplication:
         """Update mode policy and rate limiter when config changes."""
         cfg = (event.data or {}).get("config")
         if cfg:
+            if self.access_controller:
+                self.access_controller.ensure_sysop_row(cfg)
             if self.mode_policy:
                 self.mode_policy.update_config(cfg)
             if self.rate_limiter and self.mode_policy:

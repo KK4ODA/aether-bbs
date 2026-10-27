@@ -22,6 +22,8 @@ from core.events import EventBus, EventType
 
 log = logging.getLogger(__name__)
 
+EXPIRY_INTERVAL = 6 * 3600   # seconds between automatic expiry runs
+
 
 # ── Message CMS delivery status ─────────────────────────────────────────────
 
@@ -123,6 +125,14 @@ def _generate_mid(from_call: str) -> str:
     return uuid.uuid4().hex[:12].upper()
 
 
+def mailbox_calls(callsign: str) -> tuple[str, str]:
+    """The addresses a station's mailbox holds: its callsign exactly as
+    connected and its base callsign.  Winlink mail is filed under the base
+    callsign, so KK4ODA-7 must see mail to KK4ODA too."""
+    call = callsign.upper()
+    return call, call.split("-")[0]
+
+
 class MessageStore:
 
     def __init__(self, config: AppConfig, event_bus: Optional[EventBus] = None):
@@ -130,6 +140,7 @@ class MessageStore:
         self._bus = event_bus
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.Lock()
+        self._expiry_stop = threading.Event()
 
         db_dir = Path(config.bbs.message_dir)
         db_dir.mkdir(parents=True, exist_ok=True)
@@ -198,9 +209,11 @@ class MessageStore:
                 pass
 
     def close(self):
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        self._expiry_stop.set()
+        with self._lock:        # not under an expiry run
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
     # ── Messages ─────────────────────────────────────────────────────────
 
@@ -262,13 +275,14 @@ class MessageStore:
             return dict(row) if row is not None else None
 
     def get_messages_for(self, callsign: str) -> list[dict]:
-        """Return unsent messages addressed to this callsign."""
+        """Return unsent messages in this callsign's mailbox (its exact
+        call and its base call)."""
         with self._lock:
             cur = self._conn.execute(
                 """SELECT * FROM messages
-                   WHERE to_call=? AND is_sent=0
+                   WHERE to_call IN (?,?) AND is_sent=0
                    ORDER BY date ASC""",
-                (callsign.upper(),),
+                mailbox_calls(callsign),
             )
             return [dict(r) for r in cur.fetchall()]
 
@@ -280,9 +294,9 @@ class MessageStore:
             if area:
                 conditions.append("area=?")
                 params.append(area.upper())
-            if to_call:
-                conditions.append("UPPER(to_call)=?")
-                params.append(to_call.upper())
+            if to_call:     # the mailbox: exact call and base call
+                conditions.append("UPPER(to_call) IN (?,?)")
+                params.extend(mailbox_calls(to_call))
             where = "WHERE " + " AND ".join(conditions)
             params.append(limit)
             cur = self._conn.execute(
@@ -420,9 +434,13 @@ class MessageStore:
             )
             return cur.fetchone() is not None
 
-    def expire_old_messages(self):
+    def expire_old_messages(self) -> int:
+        """Delete messages and bulletins past their expiry date; returns
+        how many.  Run by start_auto_expiry and the Expire Old button."""
         now = _utcnow()
         with self._lock:
+            if self._conn is None:      # closed
+                return 0
             cur = self._conn.execute(
                 "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at < ?",
                 (now,),
@@ -430,22 +448,36 @@ class MessageStore:
             self._conn.commit()
             if cur.rowcount:
                 log.info(f"Expired {cur.rowcount} old message(s)")
+            return cur.rowcount
+
+    def start_auto_expiry(self, interval: float = EXPIRY_INTERVAL):
+        """Expire old messages now and then every *interval* seconds, on a
+        background thread, until close()."""
+        def _loop():
+            while True:
+                try:
+                    self.expire_old_messages()
+                except Exception as e:
+                    log.warning(f"Message expiry failed: {e}")
+                if self._expiry_stop.wait(interval):
+                    return
+        threading.Thread(target=_loop, daemon=True, name="MessageExpiry").start()
 
     def get_new_messages_for(self, callsign: str, since: Optional[str] = None) -> list[dict]:
         with self._lock:
             if since:
                 cur = self._conn.execute(
                     """SELECT id,from_call,subject,date FROM messages
-                       WHERE to_call=? AND created_at > ?
+                       WHERE to_call IN (?,?) AND created_at > ?
                        ORDER BY date ASC""",
-                    (callsign.upper(), since),
+                    (*mailbox_calls(callsign), since),
                 )
             else:
                 cur = self._conn.execute(
                     """SELECT id,from_call,subject,date FROM messages
-                       WHERE to_call=? AND is_read=0
+                       WHERE to_call IN (?,?) AND is_read=0
                        ORDER BY date ASC""",
-                    (callsign.upper(),),
+                    mailbox_calls(callsign),
                 )
             return [dict(r) for r in cur.fetchall()]
 
@@ -574,10 +606,12 @@ class MessageStore:
                                winlink_password: str = ""):
         """Set Winlink forwarding opt-in for a callsign with their CMS password.
 
-        The password is encrypted at rest using the machine_secret.
+        Kept for the base callsign, like the BBS password, so every SSID of
+        the call shares it.  The password is encrypted at rest using the
+        machine_secret.
         """
         from core.crypto import encrypt_value
-        call = callsign.upper()
+        call = callsign.upper().split("-")[0]
         machine = self._config.security.machine_secret or ""
         enc_pw = encrypt_value(winlink_password, machine) if winlink_password else ""
         with self._lock:
@@ -591,8 +625,30 @@ class MessageStore:
                            ELSE '' END""",
                 (call, 1 if registered else 0, enc_pw),
             )
+            # 1.3.8 and earlier kept it for the call with SSID: the entry
+            # for the base call replaces those
+            self._conn.execute(
+                """UPDATE user_prefs SET winlink_registered=0, winlink_password=''
+                   WHERE callsign LIKE ?""",
+                (f"{call}-%",),
+            )
             self._conn.commit()
         log.info(f"Winlink registration for {call}: {'ON' if registered else 'OFF'}")
+
+    def get_winlink_registration(self, callsign: str) -> tuple[bool, str]:
+        """(registered, encrypted Winlink password) for the callsign's base
+        call.  An entry kept for the exact call with SSID by 1.3.8 and
+        earlier is still read."""
+        call, base = mailbox_calls(callsign)
+        with self._lock:
+            for c in dict.fromkeys((base, call)):
+                row = self._conn.execute(
+                    """SELECT winlink_registered, winlink_password
+                       FROM user_prefs WHERE callsign=?""", (c,),
+                ).fetchone()
+                if row and row[0]:
+                    return True, row[1] or ""
+        return False, ""
 
     def message_count(self) -> int:
         with self._lock:

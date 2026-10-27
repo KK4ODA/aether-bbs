@@ -326,3 +326,26 @@ def test_the_winlink_forward_list_page_is_gone_and_old_settings_load(qapp, tmp_p
     labels = [tab._nav.item(i).text() for i in range(tab._nav.count())]
     assert not any("Fwd" in label for label in labels)
     assert "Inbound Email" in labels
+
+
+def test_max_sessions_is_named_as_needing_a_restart():
+    from core.config import AppConfig
+    from gui.settings import restart_needed
+    old = AppConfig()
+    new = old.model_copy(deep=True)
+    new.bbs.max_sessions = 2
+    assert restart_needed(old, new) == ["Max Sessions"]
+
+
+def test_soundmodem_hidden_ports_are_not_a_conflict(qapp, tmp_path):
+    """The form counted a Soundmodem instance's hidden CMD/Data ports and
+    refused to save next to a VARA instance on 8300."""
+    cm, tab = _tab(tmp_path, (
+        '[[instances]]\nname = "VHF"\n'
+        '[[instances]]\nname = "Packet"\ntransport = "SOUNDMODEM"\n'))
+    tab._validate_ports()
+    assert tab._port_warning.text() == ""
+    tab._inst_data[1]["soundmodem"].port = 8301      # its AGWPE port does count
+    tab._inst_selected = -1                           # keep the edited value
+    tab._validate_ports()
+    assert "8301" in tab._port_warning.text()

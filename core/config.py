@@ -40,10 +40,7 @@ class StationConfig(BaseModel):
     beacon_text:         str   = "Aether BBS"
     # Legacy single-callsign field — migrated to tactical_addresses on load
     home_tactical_callsign: str = Field(default="", max_length=8)
-    tactical_addresses:  list[TacticalAddress] = Field(
-        default_factory=lambda: [TacticalAddress(callsign="BRECKEN",
-                                                 alert_phrase="Priority message received")]
-    )
+    tactical_addresses:  list[TacticalAddress] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _migrate_legacy_tactical(self) -> "StationConfig":
@@ -284,6 +281,13 @@ class InstanceConfig(BaseModel):
     def is_aether(self) -> bool:
         return self.transport.upper() == "AETHER_HF"
 
+    def used_ports(self) -> tuple[int, ...]:
+        """The TCP ports this instance connects to: its AGWPE port for
+        Soundmodem (cmd_port/data_port are not used), else cmd/data."""
+        if self.is_soundmodem:
+            return (self.soundmodem.port,)
+        return (self.cmd_port, self.data_port)
+
     @model_validator(mode="after")
     def _resolve_defaults(self):
         # Migrate legacy mode field to transport
@@ -405,7 +409,8 @@ class SecurityConfig(BaseModel):
     # Operational mode: restricted (default), open, emcomm
     operational_mode:        str  = Field(default="restricted",
                                           pattern="^(restricted|open|emcomm)$")
-    # When True, APPROVED+ users without a password are prompted to set one
+    # When True, APPROVED+ users must log in with a password; one without a
+    # password is told to ask the sysop for one and disconnected
     require_password:        bool = True
     # When True, unknown callsigns must REGISTER before accessing the BBS
     require_registration:    bool = True
@@ -465,7 +470,7 @@ class AppConfig(BaseModel):
         for inst in self.instances:
             if not inst.enabled:
                 continue
-            for port in (inst.cmd_port, inst.data_port):
+            for port in inst.used_ports():
                 if port in seen:
                     raise ValueError(
                         f"Port {port} is used by more than one enabled instance"
