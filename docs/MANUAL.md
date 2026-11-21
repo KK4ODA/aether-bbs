@@ -248,12 +248,17 @@ For VARA and Aether HF instances the BBS:
    then press **Start** (or **Restart**) on the instance's dashboard card.
 3. Sends `MYCALL <BBS callsign>`, `COMPRESSION OFF`, `BW<n>` (VARA HF; Aether HF only if
    asked), `VERSION` (Aether HF), and `LISTEN ON`. Any `WRONG` reply is logged as
-   *VARA REJECTED init command* and the init is reported as failed.
+   *VARA REJECTED init command* and the init is reported as failed. The exception is a `BW`
+   that Aether HF refuses because it is busy: the BBS logs *Aether HF could not move to … Hz
+   now* and asks again every 10 s until it moves (see [AETHER_HF.md §3](AETHER_HF.md#3-what-the-bbs-does-with-aether-hf)).
 4. Listens for calls. If the TCP link drops later, the BBS reconnects on its own (first try
    after 5 s, backing off to once a minute).
 
 Only one program can use a VARA or Aether host port at a time. Close Winlink Express,
-Pat's own VARA connection, VarAC and so on before the BBS attaches.
+Pat's own VARA connection, VarAC and so on before the BBS attaches. Aether HF gives the port to
+the newest connection, so for an Aether HF instance the BBS asks Aether's control API first and
+does not attach (or reattach) while another program holds the port. It logs *Another program
+holds Aether HF's host port* and attaches when that program closes.
 
 ### 3.5 VARA FM
 

@@ -394,3 +394,25 @@ def test_a_save_does_not_make_every_neighbour_due(tmp_path):
     edited.bbs.welcome_message = "hello"
     cm.save(edited)
     assert not fwd._is_due(cm.current().bbs.forwarding_neighbours[0])
+
+
+def test_wrong_to_connect_ends_the_call_at_once(tmp_path):
+    """Aether HF answers CONNECT to a callsign it cannot carry with WRONG
+    and no DISCONNECTED; forwarding must not wait RF_CONNECT_TIMEOUT."""
+    fwd, nbr, broker, modem, *_ = _setup(tmp_path, answer=False)
+    orig = modem.say
+
+    def say(line):
+        if line == "OK" and modem.commands[-1].upper().startswith("CONNECT "):
+            line = "WRONG"
+        orig(line)
+    modem.say = say
+    try:
+        t0 = time.time()
+        fwd._forward_with(nbr)
+        assert time.time() - t0 < 20       # not RF_CONNECT_TIMEOUT (180 s)
+        assert not broker.outbound_active
+        assert "ABORT" not in modem.commands
+    finally:
+        broker.disconnect()
+        modem.close()

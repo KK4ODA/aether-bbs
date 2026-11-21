@@ -16,7 +16,7 @@ import socket
 import logging
 import threading
 from enum import Enum, auto
-from typing import Optional
+from typing import Callable, Optional
 
 from core.config import InstanceConfig
 from core.reconnect import Backoff, retry
@@ -31,6 +31,8 @@ SOCKET_POLL_TIMEOUT = 30.0  # recv() wakes this often to check for stop; not an 
 CONNECT_RETRIES  = 5
 RETRY_BASE_DELAY = 1.0  # seconds (exponential backoff)
 MAX_RETRY_DELAY  = 60.0
+REPLY_TIMEOUT    = 5.0   # seconds to wait for an awaited command's OK / WRONG
+BW_RETRY_S       = 10.0  # seconds between tries of a BW<n> Aether HF refused
 
 
 def modem_label(cfg) -> str:
@@ -99,6 +101,23 @@ class VARAFMInterface:
         self._init_wrong_count: int = 0    # count of WRONG during init sequence
         self._in_init: bool = False        # True while init commands are being sent
 
+        # A command waiting for its answer (Aether HF answers every command
+        # with OK or WRONG, in order)
+        self._reply_wait: Optional[threading.Event] = None
+        self._reply: Optional[str] = None
+        self._wait_lock = threading.Lock()
+        # The BW<n> Aether HF refused (busy) and is being asked again; None
+        # when the modem runs what was asked
+        self.bandwidth_refused: Optional[int] = None
+        self._bw_retry_thread: Optional[threading.Thread] = None
+        # Set when the modem answered the last CONNECT with WRONG
+        self.connect_refused = threading.Event()
+        # Asked before the host port is opened: a non-empty answer is why
+        # not (Aether HF serves the newest connection and drops the older
+        # one, so attaching would take the port from another program)
+        self.attach_gate: Optional[Callable[[], str]] = None
+        self.attach_blocked: str = ""
+
     # ── Public API ─────────────────────────────────────────────────────────
 
     @property
@@ -126,6 +145,8 @@ class VARAFMInterface:
 
         def attempt() -> bool:
             attempts[0] += 1
+            if not self._may_attach():
+                return False
             try:
                 self._open_sockets()
                 return True
@@ -153,6 +174,11 @@ class VARAFMInterface:
         if self._stop_event.is_set():
             return
 
+        if self.attach_blocked:
+            # _may_attach said why, once; the broker keeps checking
+            log.debug(f"[{self.cfg.name}] Not attached: {self.attach_blocked}")
+            self._set_state(VARAFMState.DISCONNECTED)
+            return
         log.error(f"[{self.cfg.name}] Could not connect to {modem_label(self.cfg)} "
                   f"after {CONNECT_RETRIES} attempts")
         if getattr(self.cfg, "is_aether", False):
@@ -161,6 +187,23 @@ class VARAFMInterface:
                 f"on (Setup step 5, port {self.cfg.cmd_port})?"
             )
         self._set_state(VARAFMState.DISCONNECTED)
+
+    def _may_attach(self) -> bool:
+        """Ask the attach gate; say once per spell why the BBS waits."""
+        gate = self.attach_gate
+        reason = ""
+        if gate is not None:
+            try:
+                reason = gate() or ""
+            except Exception as e:     # a gate that fails never blocks
+                log.debug(f"[{self.cfg.name}] attach check failed: {e}")
+        if reason and reason != self.attach_blocked:
+            log.warning(f"[{self.cfg.name}] {reason}")
+        elif not reason and self.attach_blocked:
+            log.info(f"[{self.cfg.name}] {modem_label(self.cfg)}'s host port is "
+                     f"free again: attaching")
+        self.attach_blocked = reason
+        return not reason
 
     def _open_sockets(self):
         """Open the command and data ports (raises OSError)."""
@@ -215,6 +258,19 @@ class VARAFMInterface:
     def send_data(self, data: bytes):
         """Queue data for transmission on the data channel."""
         self._tx_queue.put(data)
+
+    def send_and_wait(self, cmd: str, timeout: float = REPLY_TIMEOUT) -> Optional[str]:
+        """Send *cmd* and wait for its OK / WRONG (Aether HF answers every
+        command, in order).  None when no answer came."""
+        with self._wait_lock:
+            self._reply = None
+            self._reply_wait = threading.Event()
+            try:
+                self.send_cmd(cmd)
+                self._reply_wait.wait(timeout=timeout)
+                return self._reply
+            finally:
+                self._reply_wait = None
 
     def recv_data(self, timeout: float = 1.0) -> Optional[bytes]:
         """Non-blocking read from RX queue."""
@@ -322,7 +378,20 @@ class VARAFMInterface:
 
         # 3. HF-specific: set bandwidth
         bw = init_bandwidth(self.cfg)
-        if bw:
+        if bw and getattr(self.cfg, "is_aether", False):
+            # Aether HF moves only between sessions: BW is WRONG while a
+            # session, call, probe or transmission (a beacon, an APRS
+            # datagram) is under way, and is not remembered.  Refused, the
+            # station runs its own bandwidth, so ask again until it moves.
+            reply = self.send_and_wait(f"BW{bw}")
+            if _aborted():
+                return False
+            if reply == "WRONG":
+                self._bandwidth_refused(bw)
+            else:
+                self.bandwidth_refused = None
+                log.info(f"[{self.cfg.name}] {mode} bandwidth set to {bw} Hz")
+        elif bw:
             self.send_cmd(f"BW{bw}")
             time.sleep(1.0)
             if _aborted():
@@ -348,6 +417,35 @@ class VARAFMInterface:
 
         self._in_init = False
         return True
+
+    def _bandwidth_refused(self, bw: int):
+        """Aether HF could not move to ``bw`` now: retry until it does."""
+        self.bandwidth_refused = bw
+        log.warning(
+            f"[{self.cfg.name}] Aether HF could not move to {bw} Hz now (a "
+            f"session, call or transmission was under way); it runs its own "
+            f"bandwidth meanwhile. Asking again every {BW_RETRY_S:.0f} s."
+        )
+        t = self._bw_retry_thread
+        if t is not None and t.is_alive():
+            return
+        self._bw_retry_thread = threading.Thread(
+            target=self._retry_bandwidth, name=f"BWRetry-{self.cfg.name}",
+            daemon=True)
+        self._bw_retry_thread.start()
+
+    def _retry_bandwidth(self):
+        while not self._stop_event.wait(BW_RETRY_S):
+            bw = self.bandwidth_refused
+            if bw is None or self._cmd_sock is None:
+                return
+            if (self._in_init or self._state in (
+                    VARAFMState.CONNECTED, VARAFMState.DISCONNECTED)):
+                continue
+            if self.send_and_wait(f"BW{bw}") == "OK" and self.bandwidth_refused == bw:
+                self.bandwidth_refused = None
+                log.info(f"[{self.cfg.name}] Aether HF now runs {bw} Hz")
+                return
 
     def _start_threads(self):
         # Each thread keeps the socket it was started with and ends when that
@@ -424,7 +522,7 @@ class VARAFMInterface:
           CONNECTED <remote> <local> [WIDE]
           DISCONNECTED
           BUFFER <n>
-          IAMALIVE                 (VARA FM keepalive, sent every ~60 s)
+          IAMALIVE                 (keepalive: VARA FM ~60 s, Aether HF 10 s)
           REGISTERED <call>
           LINK REGISTERED
           UNENCRYPTED LINK
@@ -487,6 +585,10 @@ class VARAFMInterface:
         elif upper == "OK":
             last = getattr(self, '_last_cmd', '?')
             log.info(f"[{self.cfg.name}] VARA OK (after: {last})")
+            waiter = self._reply_wait
+            if waiter is not None:
+                self._reply = "OK"
+                waiter.set()
 
         elif upper == "PENDING":
             log.info(f"[{self.cfg.name}] *** INBOUND CONNECT ATTEMPT DETECTED (PENDING) ***")
@@ -531,7 +633,16 @@ class VARAFMInterface:
 
         elif upper == "WRONG":
             last = getattr(self, '_last_cmd', '?')
-            if getattr(self, '_in_init', False):
+            waiter = self._reply_wait       # read once: the waiting thread clears it
+            if last.upper().startswith("CONNECT "):
+                # No DISCONNECTED follows a refused CONNECT: say the call ended
+                self.connect_refused.set()
+            if waiter is not None:
+                # Its sender handles the answer (a BW Aether HF refused)
+                self._reply = "WRONG"
+                waiter.set()
+                log.info(f"[{self.cfg.name}] Modem answered '{last}' with WRONG")
+            elif getattr(self, '_in_init', False):
                 self._init_wrong_count += 1
                 log.error(f"[{self.cfg.name}] VARA REJECTED init command: '{last}' (WRONG)")
             else:
@@ -600,6 +711,7 @@ class VARAFMInterface:
                     cmd = f"CONNECT {self.cfg.cfg_bbs_callsign()} {remote_call}"
                     if path:
                         cmd += f" VIA {path}"
+                    self.connect_refused.clear()
                     self.send_cmd(cmd)
                     return True
             time.sleep(0.5)
