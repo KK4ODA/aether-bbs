@@ -19,6 +19,12 @@ from vara.rigcontrol import RigController
 
 log = logging.getLogger(__name__)
 
+# After PENDING, the frequency is held for the acceptance and CONNECTED
+# (Aether HF says CONNECTED up to 12 s after taking the call when the
+# acceptance never keys); scanning resumes after this if neither
+# CONNECTED nor CANCELPENDING came.
+PENDING_HOLD_S = 30.0
+
 
 # ── SessionHandler protocol (unchanged from mux.py) ──────────────────────────
 
@@ -56,12 +62,16 @@ class TNCBroker:
         self._handler_lock   = threading.Lock()
         self._relay_stop     = threading.Event()
         self._retired        = False
+        self._pending_timer: Optional[threading.Timer] = None
 
         # Subscribe to events so we can forward to the active handler
         self._bus.subscribe(EventType.SESSION_CONNECTED,    self._on_session_connected)
         self._bus.subscribe(EventType.SESSION_DISCONNECTED, self._on_session_disconnected)
         self._bus.subscribe(EventType.VARA_CONNECTED,       self._on_vara_connected)
         self._bus.subscribe(EventType.VARA_DISCONNECTED,    self._on_vara_disconnected)
+        self._bus.subscribe(EventType.SESSION_PENDING,      self._on_session_pending)
+        self._bus.subscribe(EventType.SESSION_PENDING_CANCELLED,
+                            self._on_session_pending_cancelled)
 
         self._data_relay_thread: Optional[threading.Thread] = None
 
@@ -180,7 +190,18 @@ class TNCBroker:
     def connect(self):
         """Connect to VARA FM TCP. Blocking with retry."""
         self._interface.connect()
+        if (self._interface.state == VARAFMState.DISCONNECTED
+                and self._interface.attach_blocked and not self._retired):
+            # Another program holds Aether HF's host port: wait for it to
+            # let go rather than give up
+            self._start_reconnect()
         self._start_data_relay()
+
+    def set_attach_gate(self, gate) -> None:
+        """``gate()`` → why not to attach now ("" to go ahead).  Asked
+        before every attach and reconnect (Aether HF: another program
+        on its host port)."""
+        self._interface.attach_gate = gate
 
     def disconnect(self):
         """Disconnect and retire this broker — stops reconnect loops and unsubscribes."""
@@ -190,6 +211,10 @@ class TNCBroker:
         self._bus.unsubscribe(EventType.SESSION_DISCONNECTED, self._on_session_disconnected)
         self._bus.unsubscribe(EventType.VARA_CONNECTED,       self._on_vara_connected)
         self._bus.unsubscribe(EventType.VARA_DISCONNECTED,    self._on_vara_disconnected)
+        self._bus.unsubscribe(EventType.SESSION_PENDING,      self._on_session_pending)
+        self._bus.unsubscribe(EventType.SESSION_PENDING_CANCELLED,
+                              self._on_session_pending_cancelled)
+        self._cancel_pending_hold()
         if self._ptt:
             self._ptt.stop()
             self._ptt = None
@@ -212,6 +237,12 @@ class TNCBroker:
         self._bus.subscribe(EventType.SESSION_DISCONNECTED, self._on_session_disconnected)
         self._bus.subscribe(EventType.VARA_CONNECTED,       self._on_vara_connected)
         self._bus.subscribe(EventType.VARA_DISCONNECTED,    self._on_vara_disconnected)
+        self._bus.unsubscribe(EventType.SESSION_PENDING,      self._on_session_pending)
+        self._bus.unsubscribe(EventType.SESSION_PENDING_CANCELLED,
+                              self._on_session_pending_cancelled)
+        self._bus.subscribe(EventType.SESSION_PENDING,      self._on_session_pending)
+        self._bus.subscribe(EventType.SESSION_PENDING_CANCELLED,
+                            self._on_session_pending_cancelled)
 
     # ── Session arbitration (same API as old VARAFMMux) ────────────────────
 
@@ -267,6 +298,15 @@ class TNCBroker:
         inbound caller."""
         if not self.acquire_session(handler, timeout=timeout):
             return False
+        refused = self._interface.bandwidth_refused
+        if refused:
+            # Aether HF refused the BW: the call would go out in the
+            # bandwidth it runs instead (its adapter keeps the bandwidth a
+            # program asked for, refused or not)
+            log.warning(f"[{self.cfg.name}] Aether HF could not move to "
+                        f"{refused} Hz now; no call until it does")
+            self.release_session(handler)
+            return False
         self._outbound = True
         return True
 
@@ -277,6 +317,12 @@ class TNCBroker:
     @property
     def outbound_active(self) -> bool:
         return self._outbound
+
+    @property
+    def call_refused(self) -> bool:
+        """The modem answered the last CONNECT with WRONG (no DISCONNECTED
+        follows): a callsign it cannot carry, or a path it does not relay."""
+        return self._interface.connect_refused.is_set()
 
     # ── Command / data passthrough ─────────────────────────────────────────
 
@@ -345,9 +391,45 @@ class TNCBroker:
                         except Exception as e:
                             log.error(f"[{self.cfg.name}] handler on_data error: {e}")
 
+    def _on_session_pending(self, event):
+        """A call is being answered (PENDING): hold the frequency now.
+
+        The acceptance goes out before CONNECTED (Aether HF: PENDING,
+        PTT ON, CONNECTED, PTT OFF), so a scan step in between would send
+        it on the wrong channel.
+        """
+        if event.source != self.cfg.name or not self._rig_control:
+            return
+        self._rig_control.pause()
+        self._cancel_pending_hold()
+        timer = threading.Timer(PENDING_HOLD_S, self._pending_hold_over)
+        timer.daemon = True
+        self._pending_timer = timer
+        timer.start()
+
+    def _on_session_pending_cancelled(self, event):
+        if event.source != self.cfg.name:
+            return
+        self._cancel_pending_hold()
+        if self._rig_control and self._interface.state != VARAFMState.CONNECTED:
+            self._rig_control.resume()
+
+    def _pending_hold_over(self):
+        self._pending_timer = None
+        if self._rig_control and self._interface.state != VARAFMState.CONNECTED:
+            log.info(f"[{self.cfg.name}] No session {PENDING_HOLD_S:.0f} s after "
+                     f"PENDING — scanning again")
+            self._rig_control.resume()
+
+    def _cancel_pending_hold(self):
+        timer, self._pending_timer = self._pending_timer, None
+        if timer is not None:
+            timer.cancel()
+
     def _on_session_connected(self, event):
         if event.source != self.cfg.name:
             return
+        self._cancel_pending_hold()
         # Pause frequency scanning — hold current frequency for the session
         if self._rig_control:
             self._rig_control.pause()
@@ -364,6 +446,7 @@ class TNCBroker:
     def _on_session_disconnected(self, event):
         if event.source != self.cfg.name:
             return
+        self._cancel_pending_hold()
         # Resume frequency scanning
         if self._rig_control:
             self._rig_control.resume()
@@ -406,11 +489,14 @@ class TNCBroker:
             self._ptt.release("modem link lost")
         if self._retired:
             return
+        log.warning(f"[{self.cfg.name}] {modem_label(self.cfg)} TCP dropped; "
+                    f"attempting reconnect in 5s")
+        self._start_reconnect()
+
+    def _start_reconnect(self):
         thread = getattr(self, "_reconnect_thread", None)
         if thread is not None and thread.is_alive():
             return               # already reconnecting: one loop only
-        log.warning(f"[{self.cfg.name}] {modem_label(self.cfg)} TCP dropped; "
-                    f"attempting reconnect in 5s")
         self._reconnect_thread = threading.Thread(
             target=self._reconnect_loop,
             name=f"Reconnect-{self.cfg.name}",

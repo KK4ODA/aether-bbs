@@ -323,6 +323,9 @@ class BulletinStore:
 
 RF_LINE_TIMEOUT    = 180.0   # an HF round trip at a slow rung can take minutes
 RF_CONNECT_TIMEOUT = 180.0   # calling, including the modem's retries
+# After DISCONNECT: Aether HF sends what is queued for up to 60 s, then its
+# closing Morse identifier (held up to 150 s), and only then DISCONNECTED
+RF_DISCONNECT_TIMEOUT = 180.0
 _HANDSHAKE_SKIP    = 30      # lines (a banner) tolerated before the HELLO
 
 
@@ -570,11 +573,17 @@ class BulletinForwarder:
             # Aether HF (and VARA) say DISCONNECTED for a call that ends
             # without a session: refused by the modem, or unanswered.
             deadline = time.time() + RF_CONNECT_TIMEOUT
+            refused = lambda: bool(getattr(mux, "call_refused", False))
             while (time.time() < deadline and not link.connected.is_set()
-                   and not link.disconnected.is_set()):
+                   and not link.disconnected.is_set() and not refused()):
                 link.connected.wait(0.5)
             if not link.connected.is_set():
-                if link.disconnected.is_set():
+                if refused():
+                    # WRONG, and no DISCONNECTED follows (Aether HF: a
+                    # callsign it cannot carry, or a path it does not relay)
+                    log.warning(f"Forwarding to {call}: the modem refused the "
+                                f"call (WRONG) — check the neighbour's callsign")
+                elif link.disconnected.is_set():
                     log.warning(f"Forwarding to {call}: the call ended without "
                                 f"a session (refused or unanswered — see the "
                                 f"modem's log)")
@@ -588,7 +597,7 @@ class BulletinForwarder:
             if link.connected.is_set() and not link.disconnected.is_set():
                 time.sleep(2.0)   # let FWD BYE go out first
                 mux.send_cmd("DISCONNECT")
-                link.disconnected.wait(60.0)
+                link.disconnected.wait(RF_DISCONNECT_TIMEOUT)
             mux.end_outbound(link)
 
     def _exchange(self, send, recv, neighbour: "ForwardingNeighbourConfig") -> bool:

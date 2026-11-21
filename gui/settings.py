@@ -1409,6 +1409,7 @@ class SettingsTab(QScrollArea):
             host, self._inst_ae_ctl_port.value(),
             self._inst_ae_token.text().strip(),
         )
+        bbs_call = self._bbs_call.text().strip().upper()
         self._ae_test_label.setText("Asking Aether HF…")
         self._ae_test_label.setStyleSheet("color:#80848e;")
 
@@ -1423,7 +1424,7 @@ class SettingsTab(QScrollArea):
                     f"{sm.get('callsign') or '?'}, "
                     f"{sm.get('bandwidth_hz') or '?'} Hz, {sm.get('state') or '?'}"
                 ]
-                lines += [f"⚠ {p}" for p in problems(sm)]
+                lines += [f"⚠ {p}" for p in problems(sm, bbs_call)]
                 text, ok = "\n".join(lines), len(lines) == 1
             QMetaObject.invokeMethod(
                 self, "_show_aether_test",

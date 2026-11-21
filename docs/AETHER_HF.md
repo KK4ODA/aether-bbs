@@ -85,12 +85,32 @@ port pair (in the modem and in the BBS); the BBS refuses two enabled instances o
 
 **Attaching.** The BBS opens the host interface and sends `MYCALL <bbs callsign>`,
 `COMPRESSION OFF`, `BW<n>` (only when *Bandwidth* asks for one), `LISTEN ON` and `VERSION`.
-Until `LISTEN ON`, Aether answers no calls while a host is attached, so this matters. Aether
-accepts one host program at a time; close Winlink Express, Pat or VarAC on that port first.
+Until `LISTEN ON`, Aether answers no calls while a host is attached, so this matters.
 
-**Sessions.** An inbound call arrives as `PENDING` then `CONNECTED <caller> <called> <bw>`;
-the BBS takes the caller as the remote station and runs the normal BBS session. `SN` and
-`BITRATE` lines show as *Link: SNR … · level … · bps* on the instance card.
+**One program on the host port.** Aether serves one host program at a time, and the *newest*
+connection takes the port: the program attached before is cut off. So the BBS never attaches
+while another program (Winlink Express, Pat, VarAC, RMS Trimode) holds the port. It asks the
+control API first, logs *Another program holds Aether HF's host port: the BBS waits for it to
+let go*, and attaches once that program closes. If a program opened later takes the port from
+the BBS, the BBS waits the same way instead of taking it back, so the two never trade the port
+back and forth. Without the control API (unreachable, or a token missing) the BBS cannot tell
+and attaches as before.
+
+**Bandwidth.** When *Bandwidth* asks for 500 or 2300 Hz, the BBS waits for Aether's answer to
+`BW<n>`. Aether changes bandwidth only between sessions and refuses `BW` while a session, call
+or transmission (a beacon, an APRS datagram) is under way. Refused, the station runs its own
+bandwidth meanwhile, so the BBS logs *Aether HF could not move to … Hz now* and asks again
+every 10 seconds until it moves. Until then it places no outbound call (bulletin forwarding
+waits for its next interval), because the call would go out in the wrong bandwidth.
+
+**Sessions.** An inbound call arrives as `PENDING`, `PTT ON` (the acceptance), `CONNECTED
+<caller> <called> <bw>`, `PTT OFF`. `CONNECTED` can come up to 12 seconds after `PENDING` when
+the acceptance never keys, and `CANCELPENDING` says a call announced by `PENDING` came to
+nothing. The BBS takes the caller as the remote station and runs the normal BBS session.
+Frequency scanning stops at `PENDING`, so the acceptance goes out on the channel the call came
+in on; it resumes on `CANCELPENDING`, at the end of the session, or 30 seconds after a
+`PENDING` that led nowhere. `SN` and `BITRATE` lines show as *Link: SNR … · level … · bps* on
+the instance card.
 
 **The dashboard card** for an Aether instance shows a line such as
 `Aether HF 0.2.0-beta.102 · N0CALL-10 · 2300 Hz · 14.105 MHz · idle · TX legal`, and below it,
@@ -100,8 +120,9 @@ each, with a matching *resolved* line when they clear.
 **Probe and Beacon.** The card's *Probe…* asks another Aether station whether it hears the
 BBS and how well: one short transmission each way on Aether's tone floor, no session. The
 answer appears on the card, for example `KK4XYZ hears us at 7 dB, heard at 9 dB`. *Beacon*
-sends one beacon with the BBS callsign; Aether refuses beacons under automatic control
-(§97.203(d)), and the card says so.
+sends one beacon with the BBS callsign. Aether refuses beacons under automatic control while a
+rules profile is in force (§97.203(d)), and the card says so; with the rules at *None*, or
+while the host program keys the radio, it sends them.
 
 **APRS on the air.** *APRS beacon on the air, every … min* (off by default) sends the BBS's
 APRS position, from the Station settings, as an AX.25 frame in an Aether datagram. Every
@@ -129,12 +150,19 @@ the BBS's heard list under the instance's name.
 **Bulletin forwarding.** A forwarding neighbour set to *via RF* with this instance is
 called through Aether HF on its interval (see the README's *Bulletin forwarding*). Under
 automatic control, Aether's rules decide where the BBS may originate a call; a call they
-refuse ends at once and is tried again at the next interval.
+refuse ends at once and is tried again at the next interval. A `CONNECT` Aether answers with
+`WRONG` (a neighbour callsign it cannot carry: letters, digits, `-` and `/`, nine characters at
+most) also ends at once, with *the modem refused the call*. After the exchange the BBS waits up
+to three minutes for `DISCONNECTED`: Aether first sends what is still queued (a minute at most)
+and then its Morse identifier.
 
 **Starting and stopping.** Auto Start launches the executable only when Aether's control API
 is not already answering; the BBS checks the control API, never the host port, because a
 probe connection to the host port could take the one host slot. Stopping the instance stops
-a process the BBS started; an Aether HF you started yourself keeps running.
+a process the BBS started; an Aether HF you started yourself keeps running. It is stopped
+through the control API's `shutdown`, which ends a session on the air first (its disconnect
+and closing Morse identifier, up to 22 seconds). The BBS waits 30 seconds for that, as Aether
+HF's own window does, before it ends the process.
 
 ## 4. Keying: who keys the radio
 
@@ -144,6 +172,10 @@ a process the BBS started; an Aether HF you started yourself keeps running.
   `PTT ON` / `PTT OFF` and wait for the host to key. Choose a PTT method on the BBS instance
   (RTS/DTR, CAT via OmniRig, FLrig, Hamlib, CM108) as for VARA HF. Aether's rules check is off
   in this mode: you check every transmission.
+
+With *host program* keying, Aether starts its audio 150 ms (`[ptt] lead_ms`) after `PTT ON`.
+A slow keying path (OmniRig over a slow CAT port) may need that raised in Aether's settings,
+or the start of each transmission is lost.
 
 Only one program can hold the radio's CAT port. If Aether reads the dial over CAT, do not
 also give the BBS OmniRig rig control or scanning on the same port; share the radio through
@@ -163,7 +195,9 @@ control.
 |---|---|
 | *Host programs are off in Aether HF* | Aether Setup step 5: Host programs on, port matching the BBS CMD port |
 | *Could not connect to Aether HF … Is Aether HF running* | Start Aether HF (or enable Auto Start); check the port; close any other program attached to it |
-| Attached, but calls are not answered | Check the card for *not answering calls*; check Aether's log for calls to another SSID or another bandwidth (the card shows Aether's *mismatch* sentence) |
+| *Another program holds Aether HF's host port* | Winlink Express, VarAC, Pat or RMS Trimode is attached to Aether. Close it, or give it its own Aether HF; the BBS attaches when the port is free |
+| *Aether HF could not move to … Hz now* | Aether was busy (a session, call or transmission). The BBS asks again every 10 s; outbound calls wait until it moves |
+| Attached, but calls are not answered | Check the card for *not answering calls* or *does not answer calls to …* (the program on Aether's host port does not hold the BBS callsign: another program may hold it); check Aether's log for calls to another SSID or another bandwidth (the card shows Aether's *mismatch* sentence) |
 | *No rules chosen* / *TX blocked here* | Aether Setup step 1, or tune to a dial the rules allow (automatic control keeps to the automatic sub-bands) |
 | *control API not reachable* | Aether is not running, or `control_port` differs from Aether's `[control]` port; sessions still work without it |
 | *MISSING SOUNDCARD* in the log | Aether's sound card would not open: check it in Aether's Setup step 2 |

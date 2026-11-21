@@ -108,6 +108,9 @@ class FakeAetherHost:
 
     def __init__(self, cmd_port: int):
         self.commands: list[str] = []
+        # command prefix → how many more times to answer it WRONG (a BW
+        # refused while busy, a CONNECT to a callsign Aether cannot carry)
+        self.refuse: dict[str, int] = {}
         self.data_rx = bytearray()
         self._cmd = socket.socket()
         self._cmd.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -143,8 +146,17 @@ class FakeAetherHost:
                 self.commands.append(line)
                 if line.upper() == "VERSION":
                     self.say("VERSION Aether HF 0.2.0-beta.102")
+                elif self._refusing(line):
+                    self.say("WRONG")
                 else:
                     self.say("OK")
+
+    def _refusing(self, line: str) -> bool:
+        for prefix, left in self.refuse.items():
+            if line.upper().startswith(prefix) and left > 0:
+                self.refuse[prefix] = left - 1
+                return True
+        return False
 
     def _read_data(self):
         while True:
@@ -425,3 +437,182 @@ class TestAetherSession:
         finally:
             broker.disconnect()
             host.close()
+
+
+# ── Aether HF as it stands (beta.168): host port, claims, BW, PENDING ───────
+
+class TestAetherHostPortAndClaims:
+
+    def test_listening_judged_by_the_programs_claim(self):
+        """``answering`` is about Aether's own first callsign; a BBS attached
+        as another callsign is judged by its claim (ADR-0106/0108)."""
+        from aether.monitor import problems, summarize_status
+        st = json.loads(json.dumps(STATUS))
+        st["callsign"] = "KK4ODA"
+        st["answering"] = False          # KK4ODA held by no program
+        st["not_answering"] = ("the host program attached answers only for "
+                               "the callsigns its MYCALL names")
+        st["claims"] = [{"id": 3, "app": None, "kind": "host",
+                         "callsigns": ["N0CALL-10"], "listening": True}]
+        assert problems(summarize_status(st), "N0CALL-10") == []
+        st["claims"][0]["listening"] = False
+        assert any("LISTEN is off" in p
+                   for p in problems(summarize_status(st), "N0CALL-10"))
+        st["claims"][0].update(listening=True, callsigns=["VARAC1"])
+        msgs = problems(summarize_status(st), "N0CALL-10")
+        assert any("does not answer calls to N0CALL-10" in p for p in msgs), msgs
+        # an Aether HF from before claims: answering is all there is
+        del st["claims"]
+        assert any("LISTEN is off" in p for p in problems(summarize_status(st)))
+
+    def test_host_port_taken(self):
+        from aether.control import AetherControlClient, host_port_taken
+        api = FakeControlAPI()
+        try:
+            client = AetherControlClient("127.0.0.1", api.port)
+            api.status["host"]["connected"] = False
+            assert host_port_taken(client) == ""
+            api.status["host"]["connected"] = True
+            api.status["claims"] = [{"kind": "host", "callsigns": ["KK4ODA"],
+                                     "listening": True}]
+            reason = host_port_taken(client)
+            assert "Another program (as KK4ODA) holds" in reason
+        finally:
+            api.close()
+        # an unreachable control API never blocks the attach
+        assert host_port_taken(AetherControlClient("127.0.0.1", _free_port())) == ""
+
+    def test_shutdown_waits_as_long_as_aethers_own_window(self):
+        """aetherd winds a session down for up to 22 s; its window waits 30."""
+        import inspect
+        from vara.instance_manager import ModemInstanceManager
+        wait = inspect.signature(ModemInstanceManager._shutdown_aether).parameters["wait_s"]
+        assert wait.default >= 30.0
+
+
+class TestAetherSessionAsItStands:
+
+    _attach = TestAetherSession._attach
+
+    def test_waits_while_another_program_holds_the_port(self, monkeypatch):
+        """Aether serves the newest connection: the BBS must not cut off
+        Winlink Express, VarAC or RMS Trimode, at start or on reconnect."""
+        import vara.interface as interface
+        from vara.broker import TNCBroker
+        monkeypatch.setattr(interface, "CONNECT_RETRIES", 2)
+        monkeypatch.setattr(interface, "RETRY_BASE_DELAY", 0.05)
+        port = _free_port_pair()
+        host = FakeAetherHost(port)
+        app = AppConfig()
+        app.station.bbs_callsign = "N0CALL-10"
+        inst = InstanceConfig(name="HF", transport="AETHER_HF",
+                              cmd_port=port, data_port=port + 1)
+        broker = TNCBroker(inst, app, EventBus())
+        held = ["Another program holds Aether HF's host port"]
+        broker.set_attach_gate(lambda: held[0])
+        threading.Thread(target=broker.connect, daemon=True).start()
+        try:
+            time.sleep(1.0)
+            assert host.cmd_conn is None and host.commands == []
+            held[0] = ""                         # the other program let go
+            assert _wait(lambda: "LISTEN ON" in host.commands, 20), host.commands
+        finally:
+            broker.disconnect()
+            host.close()
+
+    def test_refused_bandwidth_is_asked_again(self, monkeypatch):
+        import vara.interface as interface
+        monkeypatch.setattr(interface, "BW_RETRY_S", 0.3)
+        host, broker, _ = self._attach(bandwidth=500)
+        host.refuse["BW"] = 2                     # busy twice, then it moves
+        try:
+            assert _wait(lambda: "LISTEN ON" in host.commands), host.commands
+            assert _wait(lambda: host.commands.count("BW500") >= 3, 10), host.commands
+            assert _wait(lambda: broker._interface.bandwidth_refused is None, 5)
+        finally:
+            broker.disconnect()
+            host.close()
+
+    def test_no_outbound_call_while_the_bandwidth_is_refused(self, monkeypatch):
+        """Aether's adapter keeps a refused BW as asked for, so a call would
+        go out in the bandwidth the station runs."""
+        import vara.interface as interface
+        monkeypatch.setattr(interface, "BW_RETRY_S", 3600.0)
+        host, broker, _ = self._attach(bandwidth=500)
+        host.refuse["BW"] = 99
+        try:
+            assert _wait(lambda: "LISTEN ON" in host.commands), host.commands
+            assert broker._interface.bandwidth_refused == 500
+
+            class _Link:
+                def on_cmd_event(self, e): pass
+                def on_data(self, d): pass
+
+            assert broker.begin_outbound(_Link(), timeout=1.0) is False
+            assert not broker.outbound_active
+        finally:
+            broker.disconnect()
+            host.close()
+
+    def test_wrong_to_connect_is_a_refused_call(self):
+        host, broker, _ = self._attach()
+        host.refuse["CONNECT"] = 1
+        try:
+            assert _wait(lambda: "LISTEN ON" in host.commands), host.commands
+            assert broker.connect_station("TOOLONGCALL1", busy_timeout=5.0)
+            assert _wait(lambda: broker.call_refused, 5)
+        finally:
+            broker.disconnect()
+            host.close()
+
+    def test_pending_holds_the_scan(self, monkeypatch):
+        """The acceptance goes out before CONNECTED: hold the frequency at
+        PENDING, and scan again on CANCELPENDING or after the hold."""
+        import vara.broker as broker_mod
+        monkeypatch.setattr(broker_mod, "PENDING_HOLD_S", 0.3)
+        host, broker, bus = self._attach()
+
+        class _Rig:
+            def __init__(self):
+                self.calls = []
+            def pause(self): self.calls.append("pause")
+            def resume(self): self.calls.append("resume")
+            def stop(self): self.calls.append("stop")
+            def start(self): self.calls.append("start")
+
+        try:
+            assert _wait(lambda: "LISTEN ON" in host.commands), host.commands
+            rig = _Rig()
+            broker._rig_control = rig
+            host.say("PENDING")
+            assert _wait(lambda: rig.calls == ["pause"], 5), rig.calls
+            host.say("CANCELPENDING")
+            assert _wait(lambda: rig.calls == ["pause", "resume"], 5), rig.calls
+            host.say("PENDING")                   # and nothing more comes
+            assert _wait(lambda: rig.calls[-2:] == ["pause", "resume"]
+                         and len(rig.calls) == 4, 5), rig.calls
+        finally:
+            broker._rig_control = None
+            broker.disconnect()
+            host.close()
+
+
+def test_claim_warnings_wait_for_a_second_poll():
+    """Just after the BBS attaches, its claim has not taken MYCALL and
+    LISTEN ON yet: one poll seeing that is no reason to warn."""
+    from aether.control import AetherControlClient
+    from aether.monitor import AetherMonitor
+    api = FakeControlAPI()
+    api.status["claims"] = [{"kind": "host", "callsigns": ["KK4ODA"],
+                             "listening": False}]
+    try:
+        mon = AetherMonitor("HF", AetherControlClient("127.0.0.1", api.port),
+                            EventBus(), bbs_callsign=lambda: "N0CALL-10")
+        assert mon.poll_once()["problems"] == []
+        api.status["claims"][0].update(callsigns=["N0CALL-10"], listening=True)
+        assert mon.poll_once()["problems"] == []
+        api.status["claims"][0]["listening"] = False        # and it stays off
+        assert mon.poll_once()["problems"] == []
+        assert any("LISTEN is off" in p for p in mon.poll_once()["problems"])
+    finally:
+        api.close()

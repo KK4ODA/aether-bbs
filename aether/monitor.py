@@ -23,6 +23,10 @@ from core.events import EventBus, EventType
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 5.0
+# Problems about the host program's claim are reported only when two polls
+# in a row see them: for a few seconds after the BBS attaches, Aether shows
+# its claim before MYCALL and LISTEN ON have been taken.
+_SETTLING = ("Aether HF is not answering calls", "Aether HF does not answer calls to")
 HEARD_EVERY_N_POLLS = 2          # heard.list every ~10 s
 
 
@@ -34,6 +38,17 @@ def summarize_status(st: dict) -> dict:
     indicator = reg.get("indicator") or {}
     metrics = st.get("metrics") or {}
     state = str(st.get("state", "")).lower()
+    # The host program's claim (ADR-0106): the callsigns it answers for and
+    # whether it listens.  ``answering`` is about the station's own first
+    # callsign, which a BBS attached under another callsign does not hold.
+    host_claim = None
+    for claim in st.get("claims") or []:
+        if isinstance(claim, dict) and claim.get("kind") == "host":
+            host_claim = {
+                "callsigns": [str(c).upper() for c in claim.get("callsigns") or []],
+                "listening": bool(claim.get("listening", False)),
+            }
+            break
     return {
         "reachable":     True,
         "version":       st.get("version", ""),
@@ -52,6 +67,8 @@ def summarize_status(st: dict) -> dict:
         "host_enabled":  host.get("enabled"),
         "host_attached": host.get("connected"),
         "answering":     st.get("answering"),
+        "not_answering": st.get("not_answering") or "",
+        "host_claim":    host_claim,
         "audio_fault":   st.get("audio_fault") or "",
         "ptt_fault":     st.get("ptt_fault") or "",
         "policy":        reg.get("policy", ""),
@@ -105,8 +122,11 @@ def heard_rows(stations: list[dict]) -> list[dict]:
     return rows
 
 
-def problems(summary: dict) -> list[str]:
-    """Operator-facing sentences for what stops the BBS from working."""
+def problems(summary: dict, bbs_callsign: str = "") -> list[str]:
+    """Operator-facing sentences for what stops the BBS from working.
+
+    ``bbs_callsign`` is the callsign the BBS attaches as (its MYCALL).
+    """
     out: list[str] = []
     if summary.get("host_enabled") is False:
         out.append("Host programs are off in Aether HF — turn on "
@@ -125,7 +145,19 @@ def problems(summary: dict) -> list[str]:
                    "transmit nothing. See its log.")
     if summary.get("verdict") == "blocked":
         out.append(f"TX blocked here: {summary.get('verdict_text') or 'see Aether HF'}")
-    if summary.get("host_attached") and summary.get("answering") is False:
+    claim = summary.get("host_claim")
+    call = (bbs_callsign or "").upper()
+    if summary.get("host_attached") and claim is not None:
+        if not claim["listening"]:
+            out.append("Aether HF is not answering calls for the program on "
+                       "its host port (LISTEN is off).")
+        elif call and call not in claim["callsigns"]:
+            held = ", ".join(claim["callsigns"]) or "no callsign"
+            out.append(f"Aether HF does not answer calls to {call}: the "
+                       f"program on its host port answers for {held}. Another "
+                       f"program may hold its host port, or {call}.")
+    elif summary.get("host_attached") and summary.get("answering") is False:
+        # An Aether HF from before program claims (ADR-0106)
         out.append("Aether HF is not answering calls (LISTEN is off).")
     if summary.get("mismatch"):
         if summary.get("mismatch_what") == "version":
@@ -146,14 +178,18 @@ class AetherMonitor:
         client: AetherControlClient,
         event_bus: EventBus,
         interval: float = POLL_INTERVAL_S,
+        bbs_callsign=None,
     ):
         self._name = instance_name
+        # str, or a callable giving the BBS callsign as it is now
+        self._bbs_callsign = bbs_callsign
         self._client = client
         self._bus = event_bus
         self._interval = interval
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_problems: list[str] = []
+        self._seen_once: list[str] = []
         self._reachable: Optional[bool] = None
         self._heard_seen: dict[str, int] = {}
         self._heard_primed = False
@@ -189,7 +225,15 @@ class AetherMonitor:
                     f"{summary.get('bandwidth_hz') or '?'} Hz"
                 )
             self._reachable = True
-            self._report_problems(problems(summary))
+            call = self._bbs_callsign
+            if callable(call):
+                call = call()
+            found = problems(summary, call or "")
+            settled = [p for p in found
+                       if not p.startswith(_SETTLING) or p in self._seen_once
+                       or p in self._last_problems]
+            self._seen_once = found
+            self._report_problems(settled)
 
         summary["problems"] = list(self._last_problems) if summary.get("reachable") else []
         self.last_summary = summary

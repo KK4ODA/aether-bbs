@@ -138,7 +138,8 @@ class AetherControlClient:
         return (self.call("sessions.list", params) or {}).get("sessions", [])
 
     def beacon(self) -> Any:
-        """One beacon on the tone floor (refused under automatic control)."""
+        """One beacon on the tone floor (refused under automatic control while
+        a rules profile is in force, ADR-0024 §4)."""
         return self.call("beacon")
 
     def probe(self, remote: str, timeout: float = 60.0) -> str:
@@ -175,3 +176,29 @@ class AetherControlClient:
             return True
         except AetherControlError:
             return False
+
+
+def host_port_taken(client: AetherControlClient, own_call: str = "") -> str:
+    """Why the BBS should not attach to Aether HF's host port now ("" = go).
+
+    Aether HF serves one host program at a time and the newest connection
+    replaces the older one (host-interfaces.md §2, ADR-0096).  Asked only
+    while the BBS is not attached, so ``host.connected`` means another
+    program (Winlink Express, VarAC, RMS Trimode) holds the port; attaching
+    would cut it off, and a program that reconnects too would trade the port
+    back and forth.  An unreachable control API never blocks.
+    """
+    try:
+        st = client.status()
+    except AetherControlError:
+        return ""
+    host = st.get("host") or {}
+    if not host.get("connected"):
+        return ""
+    held = []
+    for claim in st.get("claims") or []:
+        if isinstance(claim, dict) and claim.get("kind") == "host":
+            held += [str(c) for c in claim.get("callsigns") or []]
+    as_calls = f" (as {', '.join(held)})" if held else ""
+    return (f"Another program{as_calls} holds Aether HF's host port: the BBS "
+            f"waits for it to let go rather than cut it off, and attaches then.")

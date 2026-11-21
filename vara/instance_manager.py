@@ -422,7 +422,9 @@ class ModemInstanceManager:
             )
 
         if acfg.monitor:
-            monitor = AetherMonitor(cfg.name, client, self._bus)
+            monitor = AetherMonitor(
+                cfg.name, client, self._bus,
+                bbs_callsign=lambda: self._config.station.bbs_callsign)
             status.aether_monitor = monitor
             monitor.start()
 
@@ -440,6 +442,10 @@ class ModemInstanceManager:
                  f"{cfg.host} cmd:{cfg.cmd_port} data:{cfg.data_port}")
         mux = VARAFMMux(cfg, self._config, self._bus)
         status.mux = mux
+        # Aether HF hands its host port to the newest connection: never take
+        # it from a program already attached, at start or on a reconnect
+        from aether.control import host_port_taken
+        mux.set_attach_gate(lambda c=client: host_port_taken(c))
         threading.Thread(
             target=mux.connect,
             name=f"AetherConnect-{cfg.name}",
@@ -547,8 +553,15 @@ class ModemInstanceManager:
             status.subprocess = None
 
     @staticmethod
-    def _shutdown_aether(name: str, client, wait_s: float = 12.0):
-        """Ask aetherd to stop via its control API and wait for it to go."""
+    def _shutdown_aether(name: str, client, wait_s: float = 30.0):
+        """Ask aetherd to stop via its control API and wait for it to go.
+
+        aetherd ends a session on the air first (its DISC and closing Morse
+        ID, up to 22 s) and answers the control API meanwhile; Aether HF's
+        own window waits 30 s before it kills the daemon, and so does this.
+        Killed sooner, the identifier is cut and a radio keyed over CAT or
+        rigctld can stay keyed.
+        """
         from aether.control import AetherControlError
         try:
             client.call("shutdown")
