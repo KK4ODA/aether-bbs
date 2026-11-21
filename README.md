@@ -8,6 +8,22 @@ delivery.
 > Aether HF, the open-source HF modem. VARA FM and VARA HF are supported exactly as before.
 > Upgrading? See [Upgrading from VARA BBS](#upgrading-from-vara-bbs).
 
+## Screenshots
+
+![The dashboard while N1TEST is logged in: the modem instance with its session, the stations heard, the active session and the users with their roles](docs/screenshots/bbs-dashboard.png)
+
+*The dashboard while a user is logged in: the modem instance, the stations heard, the active
+session, and the users with their roles.*
+
+| Messages | Bulletins |
+|---|---|
+| ![The message list: seven messages between the sample users, the first one read](docs/screenshots/bbs-messages.png) | ![The bulletin list: four bulletins in the ALL, WX, LOCAL and DX areas, one marked urgent](docs/screenshots/bbs-bulletins.png) |
+
+Sample data in a local test: [Aether Term](https://github.com/KK4ODA/aether-term) played the
+VARA FM modem on the same PC and called the board, so nothing was transmitted. The callsigns
+are placeholders. `python tools/screens.py` makes these pictures again, with Aether Term
+checked out beside this repository.
+
 ## Features
 
 ### Transports
